@@ -294,7 +294,7 @@ def plot_results(model, device):
     
     # Simplified streamplot approach - no coloring
     plt.figure(figsize=(15, 5))
-    plt.streamplot(x, y, u.T, v.T, density=1.5)
+    plt.streamplot(X, Y, u.T, v.T, density=1.5)
     plt.title('Flow Streamlines')
     plt.xlabel('x')
     plt.ylabel('y')
