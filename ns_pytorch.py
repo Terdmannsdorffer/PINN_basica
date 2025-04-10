@@ -247,7 +247,6 @@ def generate_visualization_grid(nx=200, ny=80):
     grid_points = np.column_stack((X.flatten(), Y.flatten()))
     return torch.FloatTensor(grid_points).to(device), X, Y, nx, ny
 
-# Function to plot the results
 def plot_results(model, device):
     # Generate grid for visualization
     grid_points, X, Y, nx, ny = generate_visualization_grid()
@@ -292,9 +291,9 @@ def plot_results(model, device):
     plt.tight_layout()
     plt.show()
     
-    # Simplified streamplot approach - no coloring
+    # Simplified streamplot approach
     plt.figure(figsize=(15, 5))
-    plt.streamplot(X, Y, u.T, v.T, density=1.5)
+    plt.streamplot(X, Y, u, v, density=1.5)  # Remove .T
     plt.title('Flow Streamlines')
     plt.xlabel('x')
     plt.ylabel('y')
