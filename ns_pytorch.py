@@ -298,10 +298,36 @@ def plot_results(model, device):
     
     plt.figure(figsize=(15, 5))
     
-    # Use the actual velocity magnitude for coloring
-    strm = plt.streamplot(x, y, u.T, v.T, density=1.5, color=u.T, cmap='jet')
-    plt.colorbar(strm.lines, label='u velocity')
-    plt.title('Streamlines colored by u velocity')
+    # Create a separate streamplot figure for velocity magnitude and u velocity
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 2, 1)
+    strm = plt.streamplot(x, y, u.T, v.T, density=1.5, color=velocity_mag.T, cmap='jet')
+    plt.colorbar(strm.lines, label='velocity magnitude')
+    plt.title('Streamlines colored by velocity magnitude')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.axis('equal')
+    
+    # Add another subplot showing streamlines colored by u velocity
+    plt.subplot(1, 2, 2)
+    # For coloring by u velocity, matplotlib expects a 2D array with same shape as x/y meshgrid
+    lw = 5*velocity_mag.T/velocity_mag.T.max() + 0.5  # Linewidth based on velocity magnitude
+    strm2 = plt.streamplot(x, y, u.T, v.T, density=1.5, linewidth=lw, color='red')
+    plt.title('Streamlines with width proportional to velocity')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.axis('equal')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Another visualization showing only horizontal flow with arrows
+    plt.figure(figsize=(15, 5))
+    # Downsample for clearer arrow plot
+    skip = (slice(None, None, 5), slice(None, None, 5))
+    plt.quiver(X[skip], Y[skip], u[skip], v[skip], u[skip], cmap='jet')
+    plt.colorbar(label='u velocity')
+    plt.title('Vector field colored by u velocity')
     plt.xlabel('x')
     plt.ylabel('y')
     plt.axis('equal')
