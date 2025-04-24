@@ -48,61 +48,10 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     p_domain = outputs[:, 2]
     vel_mag_domain = np.sqrt(u_domain**2 + v_domain**2)
 
-    print("Computing shear rate and effective viscosity...")
-    xy_tensor.requires_grad_(True)
-    outputs = model(xy_tensor)
-    u = outputs[:, 0:1]
-    v = outputs[:, 1:2]
-
-    du = torch.autograd.grad(u, xy_tensor, grad_outputs=torch.ones_like(u), retain_graph=True, create_graph=True)[0]
-    dv = torch.autograd.grad(v, xy_tensor, grad_outputs=torch.ones_like(v), retain_graph=True, create_graph=True)[0]
-
-    du_dx = du[:, 0:1]
-    du_dy = du[:, 1:2]
-    dv_dx = dv[:, 0:1]
-    dv_dy = dv[:, 1:2]
-
-    gamma_dot = torch.sqrt(2 * ((du_dx)**2 + (dv_dy)**2 + 0.5*(du_dy + dv_dx)**2))
-    tau_y, k, n = 33.0, 8.66, 0.47
-    eta_eff = (tau_y / (gamma_dot + 1e-6)) + k * (gamma_dot ** (n - 1))
-
-    gamma_dot = gamma_dot.detach().cpu().numpy().flatten()
-    eta_eff = eta_eff.detach().cpu().numpy().flatten()
-
     # Create plots directory if it doesn't exist
     import os
     if not os.path.exists('plots'):
         os.makedirs('plots')
-
-    # --- Shear Rate Plot ---
-    plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(domain_points[:, 0], domain_points[:, 1], c=gamma_dot, cmap='inferno', s=5)
-    plt.colorbar(scatter, label='Shear rate')
-    plt.title('Flow Field - Shear Rate')
-    plt.xlabel('x')
-    plt.ylabel('y')
-    for segment in wall_segments:
-        (x1, y1), (x2, y2) = segment
-        plt.plot([x1, x2], [y1, y2], 'k-', linewidth=1)
-    plt.axis('equal')
-    plt.grid(True)
-    plt.savefig('plots/shear_rate.png')
-    plt.close()
-
-    # --- Effective Viscosity Plot ---
-    plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(domain_points[:, 0], domain_points[:, 1], c=eta_eff, cmap='cividis', s=5)
-    plt.colorbar(scatter, label='Effective Viscosity')
-    plt.title('Flow Field - Effective Viscosity')
-    plt.xlabel('x')
-    plt.ylabel('y')
-    for segment in wall_segments:
-        (x1, y1), (x2, y2) = segment
-        plt.plot([x1, x2], [y1, y2], 'k-', linewidth=1)
-    plt.axis('equal')
-    plt.grid(True)
-    plt.savefig('plots/viscosity_field.png')
-    plt.close()
 
     # Velocity magnitude plot
     plt.figure(figsize=(10, 8))

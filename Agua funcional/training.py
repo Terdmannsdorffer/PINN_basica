@@ -22,7 +22,7 @@ def compute_loss(model, domain_points, inlet_points, outlet_points, wall_points,
         outputs = model(xy_inlet)
         u_inlet = outputs[:, 0]
         v_inlet = outputs[:, 1]
-        inlet_loss = torch.mean(u_inlet**2) + torch.mean((v_inlet + 1)**2)
+        inlet_loss = torch.mean(u_inlet**2) + torch.mean((v_inlet + 0.5)**2)
         bc_loss = bc_loss + inlet_loss  # Use addition instead of += for gradient tracking
     
     # Simple outlet condition (pressure = 0)
