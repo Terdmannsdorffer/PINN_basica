@@ -69,7 +69,7 @@ def main():
     print("Starting main training loop...")
     trained_model = train_model(
         model, optimizer, domain_points, inlet_points, outlet_points, 
-        wall_points, wall_normals, epochs=2000
+        wall_points, wall_normals, epochs=500
     )
     
     print("Creating visualizations...")
