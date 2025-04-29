@@ -2,10 +2,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from scipy.interpolate import RegularGridInterpolator # Make sure this import is outside the function if used elsewhere
-
-# --- Assume previous code exists: device, model, domain_points, etc. ---
-# --- Assume inside_L, wall_segments, inlet_points, outlet_points are defined ---
+from scipy.interpolate import RegularGridInterpolator
 
 # Helper function to generate points inside the L-shape
 def generate_points_inside(n_points, x_min, x_max, y_min, y_max, inside_func, max_tries=100):
@@ -31,14 +28,17 @@ def generate_points_inside(n_points, x_min, x_max, y_min, y_max, inside_func, ma
 
     return np.array(points_x), np.array(points_y)
 
-
-# Modified Visualization function including the fix
-# Modified Visualization function with animation
 # Modified Visualization function with animation
 def visualize_results(model, domain_points, inside_L, wall_segments, inlet_points, outlet_points, device):
-    print("Creating visualization...")
+    print("Creating visualization for updated L-shape domain...")
+    
+    # Get L-pipe dimensions for correct scaling of visualizations
+    L_up = 0.097  # Upper horizontal length
+    L_down = 0.157  # Lower horizontal length
+    H_left = 0.3   # Left vertical height
+    H_right = 0.1  # Right vertical height
 
-    # --- Get model predictions (only need this once if called within visualize_results) ---
+    # --- Get model predictions ---
     model.eval()
     with torch.no_grad():
         xy_tensor = torch.tensor(domain_points, dtype=torch.float32, device=device)
@@ -67,7 +67,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     sample_v = v_domain[indices]
 
     # Scale arrows for visibility
-    arrow_scale = 40.0 
+    arrow_scale = 20.0  # Adjusted scale for smaller domain
     plt.quiver(sample_points[:, 0], sample_points[:, 1], sample_u, sample_v, 
             color='blue', scale=arrow_scale, width=0.002)
 
@@ -76,8 +76,8 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     plt.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=100, label='Outlet')
 
     plt.title('Carbopol Flow - Direction Analysis')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
     plt.axis('equal')
     plt.legend()
     plt.grid(True)
@@ -102,10 +102,10 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     # Calculate shear rate using proper tensor operations
     gamma_dot = torch.sqrt(2 * ((du_dx)**2 + (dv_dy)**2 + 0.5*(du_dy + dv_dx)**2) + 1e-8)
 
-    # Carbopol parameters from rheological study
-    tau_y = 5.0  # Yield stress in Pa
-    k = 2.5      # Consistency index
-    n = 0.42     # Power law index
+    # Carbopol parameters from rheological study (updated as per training.py)
+    tau_y = 35.55  # Yield stress in Pa - updated from 5.0
+    k = 2.32      # Consistency index - updated from 2.5
+    n = 0.74     # Power law index - updated from 0.42
 
     # Herschel-Bulkley model for Carbopol's effective viscosity
     eta_eff = (tau_y / (gamma_dot + 1e-6)) + k * (gamma_dot ** (n - 1))
@@ -119,8 +119,8 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
                         norm=plt.matplotlib.colors.LogNorm())  # Use log scale for better visualization
     plt.colorbar(scatter, label='Effective Viscosity (Pa·s)')
     plt.title('Carbopol Flow - Effective Viscosity')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
     for segment in wall_segments:
         (x1, y1), (x2, y2) = segment
         plt.plot([x1, x2], [y1, y2], 'k-', linewidth=1)
@@ -134,8 +134,8 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     scatter = plt.scatter(domain_points[:, 0], domain_points[:, 1], c=gamma_dot, cmap='hot', s=5)
     plt.colorbar(scatter, label='Shear Rate (1/s)')
     plt.title('Carbopol Flow - Shear Rate')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
     for segment in wall_segments:
         (x1, y1), (x2, y2) = segment
         plt.plot([x1, x2], [y1, y2], 'k-', linewidth=1)
@@ -147,10 +147,10 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     # --- Velocity magnitude plot ---
     plt.figure(figsize=(10, 8))
     scatter = plt.scatter(domain_points[:, 0], domain_points[:, 1], c=vel_mag_domain, cmap='viridis', s=5)
-    plt.colorbar(scatter, label='Velocity magnitude')
+    plt.colorbar(scatter, label='Velocity magnitude (m/s)')
     plt.title('Flow Field - Velocity Magnitude')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
     # Add walls for context
     for segment in wall_segments:
         (x1, y1), (x2, y2) = segment
@@ -163,10 +163,10 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     # --- Pressure plot ---
     plt.figure(figsize=(10, 8))
     scatter = plt.scatter(domain_points[:, 0], domain_points[:, 1], c=p_domain, cmap='plasma', s=5)
-    plt.colorbar(scatter, label='Pressure')
+    plt.colorbar(scatter, label='Pressure (Pa)')
     plt.title('Flow Field - Pressure')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
     # Add walls for context
     for segment in wall_segments:
         (x1, y1), (x2, y2) = segment
@@ -179,17 +179,17 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     # --- Streamlines setup ---
     print("Creating streamline plot...")
     # Define bounding box slightly larger than expected domain for interpolation buffer
-    x_min_bound = np.min(domain_points[:, 0]) - 0.1
-    x_max_bound = np.max(domain_points[:, 0]) + 0.1
-    y_min_bound = np.min(domain_points[:, 1]) - 0.1
-    y_max_bound = np.max(domain_points[:, 1]) + 0.1
-    nx, ny = 60, 40 # Increased resolution for better interpolation
+    x_min_bound = -0.01
+    x_max_bound = L_down + 0.01
+    y_min_bound = -0.01
+    y_max_bound = H_left + 0.01
+    nx, ny = 60, 40 # Resolution for grid
     x_grid_coords = np.linspace(x_min_bound, x_max_bound, nx)
     y_grid_coords = np.linspace(y_min_bound, y_max_bound, ny)
     X, Y = np.meshgrid(x_grid_coords, y_grid_coords)
     grid_points_flat = np.column_stack((X.flatten(), Y.flatten()))
 
-    # Get predictions ONLY for points inside the L-shape for accurate interpolation near boundaries
+    # Get predictions ONLY for points inside the L-shape
     inside_mask_grid = np.array([inside_L(px, py) for px, py in grid_points_flat])
     grid_inside = grid_points_flat[inside_mask_grid]
 
@@ -219,8 +219,8 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     plt.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=30, label='Inlet', zorder=5)
     plt.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=30, label='Outlet', zorder=5)
     plt.title('Flow Field - Streamlines')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
     plt.xlim(x_min_bound, x_max_bound)
     plt.ylim(y_min_bound, y_max_bound)
     plt.axis('equal')
@@ -238,14 +238,14 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     streamlines = plt.streamplot(X, Y, u_grid, v_grid, density=1.5, color=vel_mag_grid, cmap='viridis', linewidth=1.5, arrowsize=1.5, broken_streamlines=False)
     # Avoid error if no streamlines were generated
     if hasattr(streamlines, 'lines') and streamlines.lines is not None:
-         plt.colorbar(streamlines.lines, label='Velocity magnitude')
+         plt.colorbar(streamlines.lines, label='Velocity magnitude (m/s)')
     else:
         print("Warning: No streamlines generated for colored plot.")
     plt.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=30, label='Inlet', zorder=5)
     plt.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=30, label='Outlet', zorder=5)
     plt.title('Flow Field - Streamlines Colored by Velocity Magnitude')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
     plt.xlim(x_min_bound, x_max_bound)
     plt.ylim(y_min_bound, y_max_bound)
     plt.axis('equal')
@@ -272,7 +272,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
             self.prev_x = x     # Previous position to detect movement
             self.prev_y = y
             
-        def is_near_outlet(self, outlet_points, threshold=0.2):
+        def is_near_outlet(self, outlet_points, threshold=0.02):  # Reduced threshold for smaller domain
             # Check if particle is near outlet
             for pt in outlet_points:
                 dist = np.sqrt((self.x - pt[0])**2 + (self.y - pt[1])**2)
@@ -283,7 +283,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         def is_stuck(self):
             # Check if particle hasn't moved much
             dist_moved = np.sqrt((self.x - self.prev_x)**2 + (self.y - self.prev_y)**2)
-            is_stuck = dist_moved < 0.001  # Very small movement threshold
+            is_stuck = dist_moved < 0.0005  # Very small movement threshold adjusted for smaller domain
             
             # Update previous position
             self.prev_x = self.x
@@ -298,20 +298,20 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
             return self.stuck_count > 10
     
     # Define key stages of the L-shaped pipe for guided movement
-    # These are approximate positions that particles should pass through
-    # Format: [(x, y, radius), ...]
+    # Updated guidance points to match new dimensions
     guidance_points = [
         # Entry points (near inlet)
-        (0.0, 2.0, 0.2),   # Top of the vertical section
-        (0.0, 1.5, 0.2),   # Middle of vertical section
-        (0.0, 0.8, 0.2),   # Lower part of vertical section
-        (0.0, 0.3, 0.2),   # Near the L-bend
-        (0.0, 0.0, 0.2),   # At the L-bend corner
-        (0.2, 0.0, 0.2),   # Just past the L-bend
-        (0.8, 0.0, 0.2),   # Middle of horizontal section
-        (1.5, 0.0, 0.2),   # Further along horizontal
-        (2.3, 0.0, 0.2),   # Near outlet
-        (3.0, 0.0, 0.2)    # At outlet
+        (0.0, H_left, 0.02),        # Top of the vertical section (inlet)
+        (0.0, H_left*0.75, 0.02),   # Upper part of vertical section
+        (0.0, H_left*0.5, 0.02),    # Middle of vertical section
+        (0.0, H_left*0.25, 0.02),   # Lower part of vertical section
+        (0.0, 0.02, 0.02),          # Near the L-bend
+        (L_up*0.25, 0.02, 0.02),    # Just past the L-bend
+        (L_up*0.5, 0.02, 0.02),     # Middle of horizontal section
+        (L_up*0.75, 0.02, 0.02),    # Further along horizontal to L-corner
+        (L_up, H_right*0.5, 0.02),  # Vertical section after L-corner
+        (L_down*0.75, H_right*0.5, 0.02),  # Approaching outlet
+        (L_down, H_right*0.5, 0.02)  # At outlet
     ]
     
     # Get inlet points to seed particles around
@@ -323,12 +323,12 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     for i in range(num_particles):
         # Decide whether to create active particle or waiting particle
         if i < num_particles // 3:  # Start with 1/3 of particles active
-            rx = inlet_center_x + np.random.normal(0, 0.05)
-            ry = inlet_center_y + np.random.normal(0, 0.05)
+            rx = inlet_center_x + np.random.normal(0, 0.01)  # Smaller variance for smaller domain
+            ry = inlet_center_y + np.random.normal(0, 0.01)
             # Ensure particle starts inside domain
             while not inside_L(rx, ry):
-                rx = inlet_center_x + np.random.normal(0, 0.05)
-                ry = inlet_center_y + np.random.normal(0, 0.05)
+                rx = inlet_center_x + np.random.normal(0, 0.01)
+                ry = inlet_center_y + np.random.normal(0, 0.01)
             particles.append(Particle(rx, ry))
         else:
             # These will be activated later to create continuous stream
@@ -366,7 +366,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         vel_mag = np.sqrt(u_interp**2 + v_interp**2)
         
         # If velocity is very low or particle stuck, use guidance
-        if vel_mag < 0.05:
+        if vel_mag < 0.03:  # Adjusted threshold for smaller domain
             # Find the next guidance point based on current position
             
             # First, find the current stage of the particle
@@ -400,8 +400,8 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
             # Normalize and scale
             mag = np.sqrt(u_guided**2 + v_guided**2)
             if mag > 0.001:
-                u_guided = u_guided / mag * 0.2  # Consistent velocity
-                v_guided = v_guided / mag * 0.2
+                u_guided = u_guided / mag * 0.01  # Adjusted velocity scale for smaller domain
+                v_guided = v_guided / mag * 0.01
             
             return u_guided, v_guided
         
@@ -422,7 +422,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     # Background velocity magnitude field (as a heatmap for context)
     vel_mag_domain_scattered = ax.scatter(domain_points[:, 0], domain_points[:, 1], 
                                          c=vel_mag_domain, cmap='Blues', s=10, alpha=0.2)
-    plt.colorbar(vel_mag_domain_scattered, label='Velocity magnitude')
+    plt.colorbar(vel_mag_domain_scattered, label='Velocity magnitude (m/s)')
     
     # Add a few streamlines for context
     streamlines = ax.streamplot(X, Y, u_grid, v_grid, density=0.8, color='gray', 
@@ -434,10 +434,6 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     if hasattr(streamlines, 'arrows'):
         # arrows is a PatchCollection, not an iterable of individual arrows
         streamlines.arrows.set_alpha(0.3)
-    
-    # Optionally, visualize guidance points (for debugging)
-    # for gx, gy, grad in guidance_points:
-    #     ax.add_patch(plt.Circle((gx, gy), grad, color='yellow', alpha=0.2))
     
     # Initialize empty scatter plot for particles
     scatter = ax.scatter([], [], c=[], cmap='plasma', s=25, alpha=0.8, edgecolors='black')
@@ -453,7 +449,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     def update(frame):
         nonlocal particles, completed_count
         
-        dt = 0.03  # Time step (increased for faster movement)
+        dt = 0.03  # Time step
         release_interval = 5  # How often to release new particles
         
         particles_x = []
@@ -468,12 +464,12 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
                 if p.lifetime >= 0 and frame % release_interval == 0:
                     # Activate and position at inlet
                     p.active = True
-                    p.x = inlet_center_x + np.random.normal(0, 0.05)
-                    p.y = inlet_center_y + np.random.normal(0, 0.05)
+                    p.x = inlet_center_x + np.random.normal(0, 0.01)  # Smaller variance for smaller domain
+                    p.y = inlet_center_y + np.random.normal(0, 0.01)
                     # Ensure it's inside the domain
                     while not inside_L(p.x, p.y):
-                        p.x = inlet_center_x + np.random.normal(0, 0.05)
-                        p.y = inlet_center_y + np.random.normal(0, 0.05)
+                        p.x = inlet_center_x + np.random.normal(0, 0.01)
+                        p.y = inlet_center_y + np.random.normal(0, 0.01)
                     p.prev_x = p.x  # Initialize previous position
                     p.prev_y = p.y
                 continue
@@ -587,14 +583,14 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         return scatter, completed_text
     
     # Create animation with more frames for complete journey
-    frames = 500  # Increased number of frames for longer simulation
+    frames = 300  # Adjusted for smaller domain
     anim = animation.FuncAnimation(
         fig, update, frames=frames, interval=30, blit=True)
     
     # Set plot properties
     plt.title('Carbopol Flow - Full Journey Animation')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
     plt.xlim(x_min_bound, x_max_bound)
     plt.ylim(y_min_bound, y_max_bound)
     plt.axis('equal')
@@ -605,52 +601,230 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     print(f"Saving animation with {frames} frames...")
     anim.save('plots/flow_full_journey.gif', writer='pillow', fps=20)
     plt.close()
+    
+    # --- ANIMATED STREAMLINES GIF ---
+    print("Creating animated streamlines GIF showing arrows moving across entire L-shape...")
 
-    print("Visualizations generation complete.")
+    # Setup the figure for animation
+    fig, ax = plt.subplots(figsize=(12, 9))
 
-# Reflect analysis (simplified)
-def analyze_reflection(model, wall_points, wall_normals,device):
-    print("Analyzing reflection at walls...")
+    # Draw domain boundaries
+    for segment in wall_segments:
+        (x1, y1), (x2, y2) = segment
+        ax.plot([x1, x2], [y1, y2], 'k-', linewidth=2)
 
-    if len(wall_points) < 5:
-        print("Not enough wall points for reflection analysis")
-        return
+    # Mark inlet and outlet
+    ax.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=50, label='Inlet', zorder=5)
+    ax.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=50, label='Outlet', zorder=5)
 
-    indices = np.linspace(0, len(wall_points)-1, 5, dtype=int)
-    test_points = wall_points[indices]
-    test_normals = wall_normals[indices]
+    # Create a static background streamplot
+    streamplot = ax.streamplot(X, Y, u_grid, v_grid, density=1.5, 
+                            color='lightgray', linewidth=0.7, arrowsize=0.8)
 
-    plt.figure(figsize=(15, 6))
-    for i in range(len(test_points)):
-        plt.subplot(1, 5, i+1)
-        wall_pt = test_points[i]
-        normal = test_normals[i]
-        tangent = [-normal[1], normal[0]]
+    # Generate arrows that will move along the streamlines
+    num_arrows = 150  # More arrows for better coverage
 
-        model.eval()
-        with torch.no_grad():
-            pred = model(torch.tensor([wall_pt], dtype=torch.float32, device=device))
-            u, v = pred[0, 0].item(), pred[0, 1].item()
+    # Define key regions of the L-shape to ensure coverage based on new dimensions
+    regions = [
+        # Vertical part (from inlet)
+        {"x_min": -0.02, "x_max": 0.05, "y_min": 0.1, "y_max": H_left, "weight": 0.4},
+        # Horizontal part (near outlet)
+        {"x_min": L_up, "x_max": L_down, "y_min": 0, "y_max": H_right, "weight": 0.3},
+        # Corner/bend area
+        {"x_min": 0, "x_max": L_up, "y_min": 0, "y_max": 0.1, "weight": 0.3}
+    ]
+    
+    # Initialize arrow arrays
+    arrows_x = []
+    arrows_y = []
+    arrows_u = []
+    arrows_v = []
+    arrow_colors = []
 
-        plt.plot([wall_pt[0]-tangent[0]*0.2, wall_pt[0]+tangent[0]*0.2],
-                 [wall_pt[1]-tangent[1]*0.2, wall_pt[1]+tangent[1]*0.2],
-                 'k-', linewidth=2)
+    # Function to seed arrows in a specific region
+    def seed_region(x_min, x_max, y_min, y_max, count):
+        seeded = 0
+        max_attempts = count * 5  # Limit attempts to avoid infinite loop
+        attempts = 0
+        
+        local_x, local_y, local_u, local_v, local_colors = [], [], [], [], []
+        
+        while seeded < count and attempts < max_attempts:
+            attempts += 1
+            x = np.random.uniform(x_min, x_max)
+            y = np.random.uniform(y_min, y_max)
+            
+            # Only add if inside domain
+            if inside_L(x, y):
+                # Get velocity at this point
+                distances = np.sqrt((x_flat - x)**2 + (y_flat - y)**2)
+                if len(distances) > 0:
+                    nearest_indices = np.argsort(distances)[:4]
+                    
+                    # Weighted average based on distance
+                    weights = 1.0 / (distances[nearest_indices] + 1e-10)
+                    weights = weights / np.sum(weights)
+                    
+                    u_val = np.sum(u_flat[nearest_indices] * weights)
+                    v_val = np.sum(v_flat[nearest_indices] * weights)
+                    
+                    # Only add if velocity is non-negligible
+                    vel_mag = np.sqrt(u_val**2 + v_val**2)
+                    if vel_mag > 0.001:
+                        local_x.append(x)
+                        local_y.append(y)
+                        local_u.append(u_val / vel_mag)  # Normalized direction
+                        local_v.append(v_val / vel_mag)  # Normalized direction
+                        local_colors.append(vel_mag)  # Color by velocity magnitude
+                        seeded += 1
+        
+        return local_x, local_y, local_u, local_v, local_colors
 
-        plt.arrow(wall_pt[0], wall_pt[1], 
-                  normal[0]*0.1, normal[1]*0.1, 
-                  head_width=0.02, color='blue')
+    # Seed arrows in each region according to weights
+    for region in regions:
+        count = int(num_arrows * region["weight"])
+        x_list, y_list, u_list, v_list, c_list = seed_region(
+            region["x_min"], region["x_max"], 
+            region["y_min"], region["y_max"], 
+            count
+        )
+        arrows_x.extend(x_list)
+        arrows_y.extend(y_list)
+        arrows_u.extend(u_list)
+        arrows_v.extend(v_list)
+        arrow_colors.extend(c_list)
 
-        plt.arrow(wall_pt[0], wall_pt[1],
-                  u*0.1, v*0.1,
-                  head_width=0.02, color='red')
+    # Create initial quiver plot for the arrows
+    quiver = ax.quiver(arrows_x, arrows_y, arrows_u, arrows_v, arrow_colors,
+                    scale=30, width=0.003, cmap='viridis', pivot='mid',
+                    zorder=10)
 
-        plt.title(f'Point {i+1}')
-        plt.xlim(wall_pt[0]-0.3, wall_pt[0]+0.3)
-        plt.ylim(wall_pt[1]-0.3, wall_pt[1]+0.3)
-        plt.axis('equal')
-        plt.grid(True)
+    plt.colorbar(quiver, label='Velocity Magnitude (m/s)')
 
-    plt.tight_layout()
-    plt.savefig('plots/reflection_analysis.png')
+    # Function to update arrow positions for animation
+    def update_arrows(frame):
+        # Speed factor - adjust for faster/slower movement
+        speed_factor = 0.01  # Reduced for smaller domain
+        
+        # New positions for arrows
+        new_x = []
+        new_y = []
+        new_u = []
+        new_v = []
+        new_colors = []
+        
+        for i in range(len(arrows_x)):
+            # Current position
+            x, y = arrows_x[i], arrows_y[i]
+            
+            # Get velocity at current position
+            if inside_L(x, y):
+                # Find nearest grid points
+                distances = np.sqrt((x_flat - x)**2 + (y_flat - y)**2)
+                if len(distances) > 0:
+                    nearest_indices = np.argsort(distances)[:4]
+                    
+                    # Weighted average based on distance
+                    weights = 1.0 / (distances[nearest_indices] + 1e-10)
+                    weights = weights / np.sum(weights)
+                    
+                    u_val = np.sum(u_flat[nearest_indices] * weights)
+                    v_val = np.sum(v_flat[nearest_indices] * weights)
+                    
+                    # Update position based on velocity
+                    vel_mag = np.sqrt(u_val**2 + v_val**2)
+                    if vel_mag > 0.001:
+                        # Movement is proportional to velocity magnitude
+                        dx = u_val * speed_factor
+                        dy = v_val * speed_factor
+                        
+                        # New position
+                        new_x_pos = x + dx
+                        new_y_pos = y + dy
+                        
+                        # Check if new position is inside domain
+                        if inside_L(new_x_pos, new_y_pos):
+                            new_x.append(new_x_pos)
+                            new_y.append(new_y_pos)
+                            new_u.append(u_val / vel_mag)  # Normalized direction
+                            new_v.append(v_val / vel_mag)  # Normalized direction
+                            new_colors.append(vel_mag)
+                            continue
+            
+            # If we reached here, either:
+            # - The arrow is outside the domain
+            # - The velocity is negligible
+            # - There was an interpolation issue
+            # So, we reset the arrow to a new position
+            
+            # Choose a region to reset to based on weights
+            reset_region = np.random.choice(len(regions), p=[r["weight"] for r in regions])
+            region = regions[reset_region]
+            
+            # Try to find a valid point in the chosen region
+            for _ in range(10):  # Try up to 10 times
+                reset_x = np.random.uniform(region["x_min"], region["x_max"])
+                reset_y = np.random.uniform(region["y_min"], region["y_max"])
+                if inside_L(reset_x, reset_y):
+                    break
+            
+            # If inside domain, get velocity at reset position
+            if inside_L(reset_x, reset_y):
+                # Find nearest grid points
+                distances = np.sqrt((x_flat - reset_x)**2 + (y_flat - reset_y)**2)
+                if len(distances) > 0:
+                    nearest_indices = np.argsort(distances)[:4]
+                    
+                    # Weighted average based on distance
+                    weights = 1.0 / (distances[nearest_indices] + 1e-10)
+                    weights = weights / np.sum(weights)
+                    
+                    u_reset = np.sum(u_flat[nearest_indices] * weights)
+                    v_reset = np.sum(v_flat[nearest_indices] * weights)
+                    
+                    # Only add if velocity is non-negligible
+                    vel_mag_reset = np.sqrt(u_reset**2 + v_reset**2)
+                    if vel_mag_reset > 0.001:
+                        new_x.append(reset_x)
+                        new_y.append(reset_y)
+                        new_u.append(u_reset / vel_mag_reset)  # Normalized direction
+                        new_v.append(v_reset / vel_mag_reset)  # Normalized direction
+                        new_colors.append(vel_mag_reset)
+        
+        # Update the arrow positions and directions
+        arrows_x[:] = new_x
+        arrows_y[:] = new_y
+        arrows_u[:] = new_u
+        arrows_v[:] = new_v
+        
+        # Update the quiver plot
+        quiver.set_offsets(np.c_[new_x, new_y])
+        quiver.set_UVC(np.array(new_u), np.array(new_v))
+        
+        # Update colors if we have them
+        if hasattr(quiver, 'set_array') and len(new_colors) > 0:
+            quiver.set_array(np.array(new_colors))
+        
+        return quiver,
+
+    # Create and save the animation
+    frames = 100  # Number of frames
+    print(f"Creating animation with {frames} frames...")
+    anim = animation.FuncAnimation(fig, update_arrows, frames=frames, interval=50, blit=True)
+
+    # Set plot properties
+    plt.title('Carbopol Flow - Animated Streamlines')
+    plt.xlabel('x (m)')
+    plt.ylabel('y (m)')
+    plt.xlim(x_min_bound, x_max_bound)
+    plt.ylim(y_min_bound, y_max_bound)
+    plt.axis('equal')
+    plt.legend()
+    plt.grid(True)
+
+    # Save animation
+    print("Saving animated streamlines GIF...")
+    anim.save('plots/streamlines_animated.gif', writer='pillow', fps=15)
     plt.close()
-    print("Reflection analysis saved")
+    
+    print("Visualizations generation complete.")

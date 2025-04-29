@@ -1,18 +1,33 @@
 import numpy as np
 
-# Create a basic L-shaped domain
-def inside_L(x, y, W=0.5, L_v=2.0, L_h=3.0):
-    vertical = (-W/2 <= x <= W/2) and (-W/2 <= y <= L_v)
-    horizontal = (-W/2 <= x <= L_h) and (-W/2 <= y <= W/2)
-    return vertical or horizontal
+# Create a basic L-shaped domain with new dimensions
+def inside_L(x, y, W=0.157, L_v=0.3, L_h=0.157):
+    # L-shaped pipe dimensions from user input
+    L_up = 0.097  # Upper horizontal length
+    L_down = 0.157  # Lower horizontal length
+    H_left = 0.3  # Left vertical height
+    H_right = 0.1  # Right vertical height
+    
+    # Main rectangle minus the corner rectangle
+    main_rect = (0 <= x <= L_down) and (0 <= y <= H_left)
+    corner_rect = (L_up <= x <= L_down) and (H_right <= y <= H_left)
+    return main_rect and not corner_rect
 
 # Generate a few internal points
 def generate_domain_points():
     print("Generating internal points...")
     domain_points = []
-    for _ in range(200):
-        x = np.random.uniform(-0.5, 3.0)
-        y = np.random.uniform(-0.5, 2.0)
+    
+    # L-shaped pipe dimensions from user input
+    L_up = 0.097  # Upper horizontal length
+    L_down = 0.157  # Lower horizontal length
+    H_left = 0.3  # Left vertical height
+    H_right = 0.1  # Right vertical height
+    
+    # Generate more points for better simulation accuracy
+    for _ in range(400):  # Increased from 200 to 400 for better coverage
+        x = np.random.uniform(0, L_down)
+        y = np.random.uniform(0, H_left)
         if inside_L(x, y):
             domain_points.append([x, y])
 
@@ -23,19 +38,35 @@ def generate_domain_points():
 # Generate boundary points
 def generate_boundary_points():
     print("Defining walls...")
-    W = 0.5
-    L_v = 2.0
-    L_h = 3.0
+    
+    # L-shaped pipe dimensions from user input
+    L_up = 0.097  # Upper horizontal length
+    L_down = 0.157  # Lower horizontal length
+    H_left = 0.3  # Left vertical height
+    H_right = 0.1  # Right vertical height
+    
+    # Define wall segments for the L-shape
     wall_segments = [
-        [(-W/2, -W/2), (-W/2, L_v)],      # Left wall
-        [(-W/2, L_v), (W/2, L_v)],        # Top wall (inlet)
-        [(W/2, L_v), (W/2, W/2)],         # Right upper wall
-        [(W/2, W/2), (L_h, W/2)],         # Top horizontal wall
-        [(L_h, W/2), (L_h, -W/2)],        # Right wall (outlet)
-        [(L_h, -W/2), (-W/2, -W/2)]       # Bottom wall
+        # Left wall (bottom to top)
+        [(0, 0), (0, H_left)],
+        
+        # Top wall (inlet, left to right)
+        [(0, H_left), (L_up, H_left)],
+        
+        # Right upper wall (top to bottom)
+        [(L_up, H_left), (L_up, H_right)],
+        
+        # Step wall (left to right)
+        [(L_up, H_right), (L_down, H_right)],
+        
+        # Right wall (outlet, top to bottom)
+        [(L_down, H_right), (L_down, 0)],
+        
+        # Bottom wall (right to left)
+        [(L_down, 0), (0, 0)]
     ]
 
-    # Generate a few boundary points 
+    # Generate boundary points with more density for better resolution
     print("Generating boundary points...")
     wall_points = []
     wall_normals = []
@@ -43,8 +74,8 @@ def generate_boundary_points():
     outlet_points = []
 
     for i, ((x1, y1), (x2, y2)) in enumerate(wall_segments):
-        # Generate 10 points per segment
-        t_vals = np.linspace(0, 1, 10)
+        # Generate more points per segment for better boundary representation
+        t_vals = np.linspace(0, 1, 15)  # Increased from 10 to 15
         for t in t_vals:
             x = x1 + t * (x2 - x1)
             y = y1 + t * (y2 - y1)

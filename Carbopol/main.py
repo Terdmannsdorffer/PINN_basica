@@ -9,7 +9,7 @@ import sys
 from model import SimplePINN
 from domain import generate_domain_points, generate_boundary_points, inside_L
 from training import train_model
-from visualization import visualize_results, analyze_reflection
+from visualization import visualize_results
 
 print("===== Starting PINN script with fixed gradients =====")
 print("Python version:", sys.version)
@@ -74,7 +74,6 @@ def main():
     
     print("Creating visualizations...")
     visualize_results(trained_model, domain_points, inside_L, wall_segments, inlet_points, outlet_points,device)
-    analyze_reflection(trained_model, wall_points, wall_normals,device)
     
     print("Saving model...")
     torch.save(trained_model.state_dict(), 'models/simple_pinn.pth')
@@ -85,7 +84,7 @@ def main():
 if __name__ == "__main__":
     try:
         print("Starting main function...")
-        main()
+        main() 
         print("Script completed successfully!")
     except Exception as e:
         import traceback
