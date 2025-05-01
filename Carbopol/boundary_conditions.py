@@ -37,7 +37,7 @@ def compute_momentum_bc(model, wall_points, wall_normals, restitution_coef=1.0, 
     slip_loss = torch.mean((1.0 - slip_factor) * tangential_vel_mag**2)
     
     # No-penetration constraint at walls (normal velocity = 0)
-    normal_loss = torch.mean(normal_vel**2)
+    normal_loss = 10 * torch.mean(normal_vel**2)
     
     # Return combined loss
     return normal_loss + 0.5 * slip_loss

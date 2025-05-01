@@ -183,7 +183,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     x_max_bound = L_down + 0.01
     y_min_bound = -0.01
     y_max_bound = H_left + 0.01
-    nx, ny = 60, 40 # Resolution for grid
+    nx, ny = 100, 80  # Resolution for grid
     x_grid_coords = np.linspace(x_min_bound, x_max_bound, nx)
     y_grid_coords = np.linspace(y_min_bound, y_max_bound, ny)
     X, Y = np.meshgrid(x_grid_coords, y_grid_coords)
@@ -191,10 +191,37 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
 
     # Get predictions ONLY for points inside the L-shape
     inside_mask_grid = np.array([inside_L(px, py) for px, py in grid_points_flat])
+    # After determining inside_mask_grid
+    # Create a buffer zone by eroding the mask slightly
+    for i in range(len(inside_mask_grid)):
+        x, y = grid_points_flat[i]
+        if inside_mask_grid[i]:
+            # Check if any of the 8 surrounding points is outside
+            buffer = 0.005  # Buffer size
+            for dx, dy in [(-buffer, 0), (buffer, 0), (0, -buffer), (0, buffer),
+                        (-buffer, -buffer), (-buffer, buffer), (buffer, -buffer), (buffer, buffer)]:
+                if not inside_L(x + dx, y + dy):
+                    inside_mask_grid[i] = False
+                    break
     grid_inside = grid_points_flat[inside_mask_grid]
 
     u_grid = np.full(X.shape, np.nan) # Initialize with NaN
     v_grid = np.full(X.shape, np.nan) # Initialize with NaN
+    # After computing u_grid and v_grid
+    # Find boundary points
+    for i in range(nx):
+        for j in range(ny):
+            if np.isnan(u_grid[j, i]):
+                continue
+            x, y = x_grid_coords[i], y_grid_coords[j]
+            # Check if any neighboring point is outside
+            buffer = x_grid_coords[1] - x_grid_coords[0]  # Use grid spacing
+            for dx, dy in [(-buffer, 0), (buffer, 0), (0, -buffer), (0, buffer)]:
+                if not inside_L(x + dx, y + dy):
+                    # This is a boundary point, set velocity to zero
+                    u_grid[j, i] = 0.0
+                    v_grid[j, i] = 0.0
+                    break
 
     if len(grid_inside) > 0:
         with torch.no_grad():
@@ -235,7 +262,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         (x1, y1), (x2, y2) = segment
         plt.plot([x1, x2], [y1, y2], 'k-', linewidth=2)
     vel_mag_grid = np.sqrt(u_grid**2 + v_grid**2) # NaNs will propagate
-    streamlines = plt.streamplot(X, Y, u_grid, v_grid, density=1.5, color=vel_mag_grid, cmap='viridis', linewidth=1.5, arrowsize=1.5, broken_streamlines=False)
+    streamlines =plt.streamplot(X, Y, u_grid, v_grid, density=1.5, color='blue', linewidth=1, arrowsize=1.5, broken_streamlines=True)
     # Avoid error if no streamlines were generated
     if hasattr(streamlines, 'lines') and streamlines.lines is not None:
          plt.colorbar(streamlines.lines, label='Velocity magnitude (m/s)')

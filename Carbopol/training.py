@@ -50,7 +50,7 @@ def compute_loss(model, domain_points, inlet_points, outlet_points, wall_points,
 
     if len(wall_points) > 0:
         wall_loss = compute_momentum_bc(model, wall_points, wall_normals)
-        bc_loss += 10.0 * wall_loss
+        bc_loss += 20.0 * wall_loss
 
     total_loss = 0.5 * physics_loss + bc_loss
     return total_loss
