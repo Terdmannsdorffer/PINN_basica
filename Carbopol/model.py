@@ -1,23 +1,18 @@
 import torch
 import torch.nn as nn
 
-# Check CUDA
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-else:
-    device = torch.device('cpu')
+class DeepPINN(nn.Module):
+    def __init__(self, layers=[2, 64, 64, 64, 64, 3]):
+        super(DeepPINN, self).__init__()
+        self.activation = nn.Tanh()
+        layer_list = []
 
-# Define a very simple PINN model
-class SimplePINN(nn.Module):
-    def __init__(self):
-        super(SimplePINN, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(2, 20),
-            nn.Tanh(),
-            nn.Linear(20, 20),
-            nn.Tanh(),
-            nn.Linear(20, 3)  # u, v, p outputs
-        )
-    
+        for i in range(len(layers) - 2):
+            layer_list.append(nn.Linear(layers[i], layers[i + 1]))
+            layer_list.append(self.activation)
+
+        layer_list.append(nn.Linear(layers[-2], layers[-1]))
+        self.model = nn.Sequential(*layer_list)
+
     def forward(self, x):
-        return self.net(x)
+        return self.model(x)
