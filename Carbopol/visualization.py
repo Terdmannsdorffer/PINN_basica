@@ -176,14 +176,14 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     plt.savefig('plots/pressure_field.png')
     plt.close()
 
-    # --- Streamlines setup ---
-    print("Creating streamline plot...")
+    # --- Streamlines setup with improved quality ---
+    print("Creating high-quality streamline visualization...")
     # Define bounding box slightly larger than expected domain for interpolation buffer
     x_min_bound = -0.01
     x_max_bound = L_down + 0.01
     y_min_bound = -0.01
     y_max_bound = H_left + 0.01
-    nx, ny = 100, 80  # Resolution for grid
+    nx, ny = 300, 240  # Higher resolution for smoother streamlines
     x_grid_coords = np.linspace(x_min_bound, x_max_bound, nx)
     y_grid_coords = np.linspace(y_min_bound, y_max_bound, ny)
     X, Y = np.meshgrid(x_grid_coords, y_grid_coords)
@@ -191,13 +191,12 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
 
     # Get predictions ONLY for points inside the L-shape
     inside_mask_grid = np.array([inside_L(px, py) for px, py in grid_points_flat])
-    # After determining inside_mask_grid
-    # Create a buffer zone by eroding the mask slightly
+    # Create a buffer zone by eroding the mask slightly (larger buffer)
     for i in range(len(inside_mask_grid)):
         x, y = grid_points_flat[i]
         if inside_mask_grid[i]:
-            # Check if any of the 8 surrounding points is outside
-            buffer = 0.005  # Buffer size
+            # Check if any of the surrounding points is outside with a larger buffer
+            buffer = 0.008  # Increased buffer size for better wall separation
             for dx, dy in [(-buffer, 0), (buffer, 0), (0, -buffer), (0, buffer),
                         (-buffer, -buffer), (-buffer, buffer), (buffer, -buffer), (buffer, buffer)]:
                 if not inside_L(x + dx, y + dy):
@@ -205,23 +204,8 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
                     break
     grid_inside = grid_points_flat[inside_mask_grid]
 
-    u_grid = np.full(X.shape, np.nan) # Initialize with NaN
-    v_grid = np.full(X.shape, np.nan) # Initialize with NaN
-    # After computing u_grid and v_grid
-    # Find boundary points
-    for i in range(nx):
-        for j in range(ny):
-            if np.isnan(u_grid[j, i]):
-                continue
-            x, y = x_grid_coords[i], y_grid_coords[j]
-            # Check if any neighboring point is outside
-            buffer = x_grid_coords[1] - x_grid_coords[0]  # Use grid spacing
-            for dx, dy in [(-buffer, 0), (buffer, 0), (0, -buffer), (0, buffer)]:
-                if not inside_L(x + dx, y + dy):
-                    # This is a boundary point, set velocity to zero
-                    u_grid[j, i] = 0.0
-                    v_grid[j, i] = 0.0
-                    break
+    u_grid = np.full(X.shape, np.nan)  # Initialize with NaN
+    v_grid = np.full(X.shape, np.nan)  # Initialize with NaN
 
     if len(grid_inside) > 0:
         with torch.no_grad():
@@ -236,399 +220,73 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
     else:
         print("Warning: No grid points found inside the L-shape for streamline calculation.")
 
-    # --- Static streamlines ---
-    plt.figure(figsize=(10, 8))
+    # Force zero velocity near boundaries to stop streamlines - more aggressive
+    buffer_size = min((x_max_bound - x_min_bound)/nx, (y_max_bound - y_min_bound)/ny) * 2.5
+    for j in range(ny):
+        for i in range(nx):
+            if not np.isnan(u_grid[j, i]):
+                x, y = X[j, i], Y[j, i]
+                # Check if this point is near any wall segment
+                for segment in wall_segments:
+                    (x1, y1), (x2, y2) = segment
+                    # Calculate distance to line segment
+                    length = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+                    if length > 0:
+                        # Find closest point on line
+                        t = max(0, min(1, ((x-x1)*(x2-x1) + (y-y1)*(y2-y1)) / (length**2)))
+                        px = x1 + t * (x2 - x1)
+                        py = y1 + t * (y2 - y1)
+                        # Calculate distance
+                        dist = np.sqrt((x-px)**2 + (y-py)**2)
+                        if dist < buffer_size:
+                            # Zero out velocity near walls
+                            u_grid[j, i] = 0
+                            v_grid[j, i] = 0
+                            break
+
+    # -- Calculate velocity magnitude grid --
+    vel_mag_grid = np.sqrt(u_grid**2 + v_grid**2)  # NaNs will propagate
+
+    # -- High quality streamlines --
+    plt.figure(figsize=(12, 10))
     for segment in wall_segments:
         (x1, y1), (x2, y2) = segment
         plt.plot([x1, x2], [y1, y2], 'k-', linewidth=2)
-    # Use nan values in u_grid/v_grid to prevent streamplot from drawing outside the domain
-    plt.streamplot(X, Y, u_grid, v_grid, density=1.5, color='blue', linewidth=1, arrowsize=1.5, broken_streamlines=False)
-    plt.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=30, label='Inlet', zorder=5)
-    plt.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=30, label='Outlet', zorder=5)
-    plt.title('Flow Field - Streamlines')
-    plt.xlabel('x (m)')
-    plt.ylabel('y (m)')
+
+    # Custom colormap for velocity magnitude
+    custom_cmap = plt.cm.viridis
+
+    # Use enhanced streamplot settings
+    streamlines = plt.streamplot(X, Y, u_grid, v_grid, 
+                            density=2.0,  # Increased density
+                            color=vel_mag_grid,  # Color by velocity
+                            cmap=custom_cmap, 
+                            linewidth=1.5, 
+                            arrowsize=1.5, 
+                            arrowstyle='->', 
+                            broken_streamlines=True)  # Stop at boundaries
+
+    # Add colorbar for velocity magnitude
+    cbar = plt.colorbar(streamlines.lines, label='Velocity magnitude (m/s)')
+    cbar.ax.tick_params(labelsize=10)
+
+    # Mark inlet and outlet with more prominence
+    plt.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=80, label='Inlet', zorder=5, edgecolors='black')
+    plt.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=80, label='Outlet', zorder=5, edgecolors='black')
+
+    # Improve plot aesthetics
+    plt.title('Carbopol Flow - Streamlines Colored by Velocity Magnitude', fontsize=14, fontweight='bold')
+    plt.xlabel('x (m)', fontsize=12)
+    plt.ylabel('y (m)', fontsize=12)
     plt.xlim(x_min_bound, x_max_bound)
     plt.ylim(y_min_bound, y_max_bound)
     plt.axis('equal')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('plots/streamlines.png')
+    plt.legend(fontsize=12)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('plots/high_quality_streamlines.png', dpi=300)
     plt.close()
 
-    # --- Streamlines colored by velocity ---
-    plt.figure(figsize=(12, 9))
-    for segment in wall_segments:
-        (x1, y1), (x2, y2) = segment
-        plt.plot([x1, x2], [y1, y2], 'k-', linewidth=2)
-    vel_mag_grid = np.sqrt(u_grid**2 + v_grid**2) # NaNs will propagate
-    streamlines =plt.streamplot(X, Y, u_grid, v_grid, density=1.5, color='blue', linewidth=1, arrowsize=1.5, broken_streamlines=True)
-    # Avoid error if no streamlines were generated
-    if hasattr(streamlines, 'lines') and streamlines.lines is not None:
-         plt.colorbar(streamlines.lines, label='Velocity magnitude (m/s)')
-    else:
-        print("Warning: No streamlines generated for colored plot.")
-    plt.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=30, label='Inlet', zorder=5)
-    plt.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=30, label='Outlet', zorder=5)
-    plt.title('Flow Field - Streamlines Colored by Velocity Magnitude')
-    plt.xlabel('x (m)')
-    plt.ylabel('y (m)')
-    plt.xlim(x_min_bound, x_max_bound)
-    plt.ylim(y_min_bound, y_max_bound)
-    plt.axis('equal')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('plots/streamlines_colored.png')
-    plt.close()
-
-    # --- ADDED ANIMATION SECTION ---
-    print("Creating particle animation showing complete flow path...")
-    
-    # Initialize a number of particles near the inlet
-    num_particles = 150
-    
-    # Create a particle class to track individual particles
-    class Particle:
-        def __init__(self, x, y):
-            self.x = x
-            self.y = y
-            self.active = True  # Whether particle is currently in the domain
-            self.lifetime = 0   # How long the particle has been alive
-            self.color = np.random.uniform(0.3, 1.0)  # For color-coding by age/progress
-            self.stuck_count = 0  # Counter to detect if particle is stuck
-            self.prev_x = x     # Previous position to detect movement
-            self.prev_y = y
-            
-        def is_near_outlet(self, outlet_points, threshold=0.02):  # Reduced threshold for smaller domain
-            # Check if particle is near outlet
-            for pt in outlet_points:
-                dist = np.sqrt((self.x - pt[0])**2 + (self.y - pt[1])**2)
-                if dist < threshold:
-                    return True
-            return False
-            
-        def is_stuck(self):
-            # Check if particle hasn't moved much
-            dist_moved = np.sqrt((self.x - self.prev_x)**2 + (self.y - self.prev_y)**2)
-            is_stuck = dist_moved < 0.0005  # Very small movement threshold adjusted for smaller domain
-            
-            # Update previous position
-            self.prev_x = self.x
-            self.prev_y = self.y
-            
-            if is_stuck:
-                self.stuck_count += 1
-            else:
-                self.stuck_count = 0
-                
-            # Consider it stuck if it hasn't moved for several frames
-            return self.stuck_count > 10
-    
-    # Define key stages of the L-shaped pipe for guided movement
-    # Updated guidance points to match new dimensions
-    guidance_points = [
-        # Entry points (near inlet)
-        (0.0, H_left, 0.02),        # Top of the vertical section (inlet)
-        (0.0, H_left*0.75, 0.02),   # Upper part of vertical section
-        (0.0, H_left*0.5, 0.02),    # Middle of vertical section
-        (0.0, H_left*0.25, 0.02),   # Lower part of vertical section
-        (0.0, 0.02, 0.02),          # Near the L-bend
-        (L_up*0.25, 0.02, 0.02),    # Just past the L-bend
-        (L_up*0.5, 0.02, 0.02),     # Middle of horizontal section
-        (L_up*0.75, 0.02, 0.02),    # Further along horizontal to L-corner
-        (L_up, H_right*0.5, 0.02),  # Vertical section after L-corner
-        (L_down*0.75, H_right*0.5, 0.02),  # Approaching outlet
-        (L_down, H_right*0.5, 0.02)  # At outlet
-    ]
-    
-    # Get inlet points to seed particles around
-    inlet_center_x = np.mean(inlet_points[:, 0])
-    inlet_center_y = np.mean(inlet_points[:, 1])
-    
-    # Create particles with staggered release times
-    particles = []
-    for i in range(num_particles):
-        # Decide whether to create active particle or waiting particle
-        if i < num_particles // 3:  # Start with 1/3 of particles active
-            rx = inlet_center_x + np.random.normal(0, 0.01)  # Smaller variance for smaller domain
-            ry = inlet_center_y + np.random.normal(0, 0.01)
-            # Ensure particle starts inside domain
-            while not inside_L(rx, ry):
-                rx = inlet_center_x + np.random.normal(0, 0.01)
-                ry = inlet_center_y + np.random.normal(0, 0.01)
-            particles.append(Particle(rx, ry))
-        else:
-            # These will be activated later to create continuous stream
-            particles.append(Particle(inlet_center_x, inlet_center_y))
-            particles[-1].active = False
-            particles[-1].lifetime = -np.random.randint(1, 10) * 10  # Staggered release
-    
-    # Create interpolation functions for velocity field
-    # First flatten the grid data for proper interpolation
-    valid_mask = ~np.isnan(u_grid)
-    x_flat = X[valid_mask]
-    y_flat = Y[valid_mask]
-    u_flat = u_grid[valid_mask]
-    v_flat = v_grid[valid_mask]
-    
-    # Define nearest neighbor interpolation function with guidance
-    def interpolate_velocity_with_guidance(x, y, particle_lifetime):
-        if not inside_L(x, y):
-            return 0, 0  # No velocity outside domain
-            
-        # Default: use model's velocity field
-        # Find nearest valid points for interpolation
-        distances = np.sqrt((x_flat - x)**2 + (y_flat - y)**2)
-        nearest_indices = np.argsort(distances)[:4]  # Get 4 nearest points
-        
-        # Simple weighted average based on distance
-        weights = 1.0 / (distances[nearest_indices] + 1e-10)
-        weights = weights / np.sum(weights)
-        
-        # Interpolate velocities
-        u_interp = np.sum(u_flat[nearest_indices] * weights)
-        v_interp = np.sum(v_flat[nearest_indices] * weights)
-        
-        # Check if the particle is stuck or moving too slowly
-        vel_mag = np.sqrt(u_interp**2 + v_interp**2)
-        
-        # If velocity is very low or particle stuck, use guidance
-        if vel_mag < 0.03:  # Adjusted threshold for smaller domain
-            # Find the next guidance point based on current position
-            
-            # First, find the current stage of the particle
-            current_stage = 0
-            min_dist = float('inf')
-            for i, (gx, gy, _) in enumerate(guidance_points):
-                dist = np.sqrt((x - gx)**2 + (y - gy)**2)
-                if dist < min_dist:
-                    min_dist = dist
-                    current_stage = i
-            
-            # Target the next stage (or the same if it's the last one)
-            target_stage = min(current_stage + 1, len(guidance_points) - 1)
-            
-            # Get direction toward the target
-            target_x, target_y, _ = guidance_points[target_stage]
-            dx = target_x - x
-            dy = target_y - y
-            
-            # Normalize
-            dist_to_target = np.sqrt(dx**2 + dy**2)
-            if dist_to_target > 0.001:  # Avoid division by zero
-                dx /= dist_to_target
-                dy /= dist_to_target
-            
-            # Blend model velocity with guidance velocity
-            blend_factor = 0.7  # Higher means more guidance
-            u_guided = u_interp * (1 - blend_factor) + dx * blend_factor
-            v_guided = v_interp * (1 - blend_factor) + dy * blend_factor
-            
-            # Normalize and scale
-            mag = np.sqrt(u_guided**2 + v_guided**2)
-            if mag > 0.001:
-                u_guided = u_guided / mag * 0.01  # Adjusted velocity scale for smaller domain
-                v_guided = v_guided / mag * 0.01
-            
-            return u_guided, v_guided
-        
-        return u_interp, v_interp
-    
-    # Create the figure for animation
-    fig, ax = plt.subplots(figsize=(10, 8))
-    
-    # Draw domain boundaries
-    for segment in wall_segments:
-        (x1, y1), (x2, y2) = segment
-        ax.plot([x1, x2], [y1, y2], 'k-', linewidth=2)
-    
-    # Mark inlet and outlet
-    ax.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=50, label='Inlet')
-    ax.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=50, label='Outlet')
-    
-    # Background velocity magnitude field (as a heatmap for context)
-    vel_mag_domain_scattered = ax.scatter(domain_points[:, 0], domain_points[:, 1], 
-                                         c=vel_mag_domain, cmap='Blues', s=10, alpha=0.2)
-    plt.colorbar(vel_mag_domain_scattered, label='Velocity magnitude (m/s)')
-    
-    # Add a few streamlines for context
-    streamlines = ax.streamplot(X, Y, u_grid, v_grid, density=0.8, color='gray', 
-                              linewidth=0.5, arrowsize=0.8)
-    
-    # Adjust alpha for streamlines (need to access the created artists)
-    if hasattr(streamlines, 'lines'):
-        streamlines.lines.set_alpha(0.3)
-    if hasattr(streamlines, 'arrows'):
-        # arrows is a PatchCollection, not an iterable of individual arrows
-        streamlines.arrows.set_alpha(0.3)
-    
-    # Initialize empty scatter plot for particles
-    scatter = ax.scatter([], [], c=[], cmap='plasma', s=25, alpha=0.8, edgecolors='black')
-    
-    # Add a counter for particles that reached the outlet
-    completed_text = ax.text(0.02, 0.98, "Completed: 0", transform=ax.transAxes, 
-                           ha='left', va='top', fontsize=10)
-    
-    # Counter for completed particles
-    completed_count = 0
-    
-    # Define animation update function
-    def update(frame):
-        nonlocal particles, completed_count
-        
-        dt = 0.03  # Time step
-        release_interval = 5  # How often to release new particles
-        
-        particles_x = []
-        particles_y = []
-        particles_color = []
-        
-        # Update each particle
-        for p in particles:
-            # Handle inactive particles (waiting to be released)
-            if not p.active:
-                p.lifetime += 1
-                if p.lifetime >= 0 and frame % release_interval == 0:
-                    # Activate and position at inlet
-                    p.active = True
-                    p.x = inlet_center_x + np.random.normal(0, 0.01)  # Smaller variance for smaller domain
-                    p.y = inlet_center_y + np.random.normal(0, 0.01)
-                    # Ensure it's inside the domain
-                    while not inside_L(p.x, p.y):
-                        p.x = inlet_center_x + np.random.normal(0, 0.01)
-                        p.y = inlet_center_y + np.random.normal(0, 0.01)
-                    p.prev_x = p.x  # Initialize previous position
-                    p.prev_y = p.y
-                continue
-                
-            # Update active particles
-            p.lifetime += 1
-            
-            try:
-                # Check if near outlet
-                if p.is_near_outlet(outlet_points):
-                    # Particle completed the journey!
-                    completed_count += 1
-                    # Reset to inlet for reuse
-                    p.lifetime = -np.random.randint(1, 10) * 5  # Wait before re-releasing
-                    p.active = False
-                    p.color = np.random.uniform(0.3, 1.0)  # New color for new journey
-                    p.stuck_count = 0
-                    continue
-                
-                # Check if the particle is stuck
-                if p.is_stuck():
-                    # Reset particle to a new location along the path
-                    # Choose a random guidance point as new position
-                    idx = np.random.randint(0, len(guidance_points))
-                    gx, gy, grad = guidance_points[idx]
-                    p.x = gx + np.random.normal(0, grad/3)
-                    p.y = gy + np.random.normal(0, grad/3)
-                    p.stuck_count = 0
-                    # Ensure it's inside the domain
-                    if not inside_L(p.x, p.y):
-                        p.lifetime = -np.random.randint(1, 5) * 5
-                        p.active = False
-                        continue
-                
-                # Get interpolated velocity with guidance
-                u_interp, v_interp = interpolate_velocity_with_guidance(p.x, p.y, p.lifetime)
-                
-                # Update particle position
-                new_x = p.x + u_interp * dt
-                new_y = p.y + v_interp * dt
-                
-                # Check if new position is inside domain
-                if inside_L(new_x, new_y):
-                    p.x = new_x
-                    p.y = new_y
-                    particles_x.append(p.x)
-                    particles_y.append(p.y)
-                    # Color particles by lifetime/progress (normalize color value)
-                    progress_color = min(1.0, p.lifetime / 200.0)
-                    particles_color.append(progress_color)
-                else:
-                    # If position would be outside domain, bounce back instead of disappearing
-                    # First, detect which wall was hit
-                    # Try a smaller step in the same direction
-                    smaller_step_x = p.x + u_interp * dt * 0.1
-                    smaller_step_y = p.y + v_interp * dt * 0.1
-                    
-                    if inside_L(smaller_step_x, smaller_step_y):
-                        # Try incremental steps until we hit the boundary
-                        for scale in np.linspace(0.1, 1.0, 10):
-                            test_x = p.x + u_interp * dt * scale
-                            test_y = p.y + v_interp * dt * scale
-                            if not inside_L(test_x, test_y):
-                                # We found the boundary point (approximately)
-                                boundary_x = p.x + u_interp * dt * (scale - 0.1)
-                                boundary_y = p.y + v_interp * dt * (scale - 0.1)
-                                
-                                # Reflect velocity at the boundary
-                                # Simplistic approach: reverse the velocity component
-                                # and position the particle just inside the domain
-                                p.x = boundary_x
-                                p.y = boundary_y
-                                
-                                # Add to the drawing list
-                                particles_x.append(p.x)
-                                particles_y.append(p.y)
-                                progress_color = min(1.0, p.lifetime / 200.0)
-                                particles_color.append(progress_color)
-                                break
-                    else:
-                        # If even smaller step is outside, just reset this particle
-                        # This is a fallback to avoid getting stuck at boundaries
-                        # Pick a random guidance point to resume from
-                        idx = np.random.randint(1, len(guidance_points) - 1)  # Avoid endpoints
-                        gx, gy, grad = guidance_points[idx]
-                        p.x = gx + np.random.normal(0, grad/3)
-                        p.y = gy + np.random.normal(0, grad/3)
-                        
-                        # Ensure we're inside
-                        if inside_L(p.x, p.y):
-                            particles_x.append(p.x)
-                            particles_y.append(p.y)
-                            progress_color = min(1.0, p.lifetime / 200.0)
-                            particles_color.append(progress_color)
-                        else:
-                            # If still outside, last resort: reset particle
-                            p.lifetime = -np.random.randint(1, 5) * 5
-                            p.active = False
-            except:
-                # Handle any errors by resetting particle
-                p.lifetime = -np.random.randint(1, 5) * 5
-                p.active = False
-        
-        # Update scatter plot with new positions
-        scatter.set_offsets(np.column_stack((particles_x, particles_y)))
-        scatter.set_array(np.array(particles_color))
-        
-        # Update completion counter
-        completed_text.set_text(f"Completed: {completed_count}")
-        
-        return scatter, completed_text
-    
-    # Create animation with more frames for complete journey
-    frames = 300  # Adjusted for smaller domain
-    anim = animation.FuncAnimation(
-        fig, update, frames=frames, interval=30, blit=True)
-    
-    # Set plot properties
-    plt.title('Carbopol Flow - Full Journey Animation')
-    plt.xlabel('x (m)')
-    plt.ylabel('y (m)')
-    plt.xlim(x_min_bound, x_max_bound)
-    plt.ylim(y_min_bound, y_max_bound)
-    plt.axis('equal')
-    plt.legend()
-    plt.grid(True)
-    
-    # Save animation with higher frame rate for smoother movement
-    print(f"Saving animation with {frames} frames...")
-    anim.save('plots/flow_full_journey.gif', writer='pillow', fps=20)
-    plt.close()
-    
     # --- ANIMATED STREAMLINES GIF ---
     print("Creating animated streamlines GIF showing arrows moving across entire L-shape...")
 
@@ -641,15 +299,22 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         ax.plot([x1, x2], [y1, y2], 'k-', linewidth=2)
 
     # Mark inlet and outlet
-    ax.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=50, label='Inlet', zorder=5)
-    ax.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=50, label='Outlet', zorder=5)
+    ax.scatter(inlet_points[:, 0], inlet_points[:, 1], color='green', s=80, label='Inlet', zorder=5, edgecolors='black')
+    ax.scatter(outlet_points[:, 0], outlet_points[:, 1], color='red', s=80, label='Outlet', zorder=5, edgecolors='black')
 
-    # Create a static background streamplot
-    streamplot = ax.streamplot(X, Y, u_grid, v_grid, density=1.5, 
-                            color='lightgray', linewidth=0.7, arrowsize=0.8)
+    # Create a static background streamplot - use a different style for better contrast with arrows
+    streamplot = ax.streamplot(X, Y, u_grid, v_grid, density=1.2, 
+                            color='lightgray', linewidth=0.5, arrowsize=0.5)
 
     # Generate arrows that will move along the streamlines
-    num_arrows = 150  # More arrows for better coverage
+    num_arrows = 200  # More arrows for better coverage
+
+    # Get the flattened arrays of valid points for interpolation
+    valid_mask = ~np.isnan(u_grid)
+    x_flat = X[valid_mask]
+    y_flat = Y[valid_mask]
+    u_flat = u_grid[valid_mask]
+    v_flat = v_grid[valid_mask]
 
     # Define key regions of the L-shape to ensure coverage based on new dimensions
     regions = [
@@ -660,7 +325,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         # Corner/bend area
         {"x_min": 0, "x_max": L_up, "y_min": 0, "y_max": 0.1, "weight": 0.3}
     ]
-    
+
     # Initialize arrow arrays
     arrows_x = []
     arrows_y = []
@@ -721,9 +386,9 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         arrows_v.extend(v_list)
         arrow_colors.extend(c_list)
 
-    # Create initial quiver plot for the arrows
+    # Create initial quiver plot for the arrows - use viridis colormap for better visibility
     quiver = ax.quiver(arrows_x, arrows_y, arrows_u, arrows_v, arrow_colors,
-                    scale=30, width=0.003, cmap='viridis', pivot='mid',
+                    scale=25, width=0.003, cmap='viridis', pivot='mid',
                     zorder=10)
 
     plt.colorbar(quiver, label='Velocity Magnitude (m/s)')
@@ -835,23 +500,23 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         return quiver,
 
     # Create and save the animation
-    frames = 100  # Number of frames
+    frames = 150  # Increased number of frames for smoother animation
     print(f"Creating animation with {frames} frames...")
     anim = animation.FuncAnimation(fig, update_arrows, frames=frames, interval=50, blit=True)
 
     # Set plot properties
-    plt.title('Carbopol Flow - Animated Streamlines')
-    plt.xlabel('x (m)')
-    plt.ylabel('y (m)')
+    plt.title('Carbopol Flow - Animated Streamlines', fontsize=14, fontweight='bold')
+    plt.xlabel('x (m)', fontsize=12)
+    plt.ylabel('y (m)', fontsize=12)
     plt.xlim(x_min_bound, x_max_bound)
     plt.ylim(y_min_bound, y_max_bound)
     plt.axis('equal')
-    plt.legend()
-    plt.grid(True)
+    plt.legend(fontsize=12)
+    plt.grid(True, alpha=0.3)
 
-    # Save animation
+    # Save animation with higher quality
     print("Saving animated streamlines GIF...")
-    anim.save('plots/streamlines_animated.gif', writer='pillow', fps=15)
+    anim.save('plots/streamlines_animated.gif', writer='pillow', fps=20, dpi=150)
     plt.close()
-    
+
     print("Visualizations generation complete.")

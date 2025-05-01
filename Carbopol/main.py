@@ -6,7 +6,7 @@ import os
 import sys
 
 from model import DeepPINN
-from training import train_model
+from training import train_model, train_staged
 from domain import generate_domain_points, generate_boundary_points, inside_L
 from visualization import visualize_results
 
@@ -46,7 +46,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
     print("Training model...")
-    trained_model = train_model(model, optimizer, domain_points, inlet_points, outlet_points, wall_points, wall_normals)
+    trained_model = train_staged(model, optimizer, domain_points, inlet_points, outlet_points, wall_points, wall_normals)
 
     print("Generating visualizations...")
     visualize_results(trained_model, domain_points, inside_L, wall_segments, inlet_points, outlet_points, device)
