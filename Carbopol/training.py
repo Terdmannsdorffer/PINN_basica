@@ -194,6 +194,7 @@ def train_model(model, optimizer, domain_points, inlet_points, outlet_points, wa
     plt.close()
 
     return model
+
 def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, wall_points, wall_normals):
     """
     Staged training approach for improved convergence:
