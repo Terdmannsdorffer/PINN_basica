@@ -1,3 +1,4 @@
+#training.py
 import torch
 from boundary_conditions import compute_momentum_bc
 
@@ -233,8 +234,10 @@ def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, w
             output = model(outlet)
             u_outlet, v_outlet, p_outlet = output[:, 0], output[:, 1], output[:, 2]
             
-            L_up, L_down = 0.097, 0.157
-            H_left, H_right = 0.3, 0.1
+            L_up = 0.097  # Upper horizontal length
+            L_down = 0.174  # Lower horizontal length
+            H_left = 0.12  # Left vertical height
+            H_right = 0.019  # Right vertical height
             u_in = 0.05
             u_out = u_in * (H_left / H_right) * (L_up / L_down)
             
@@ -306,8 +309,10 @@ def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, w
             output = model(outlet)
             u_outlet, v_outlet, p_outlet = output[:, 0], output[:, 1], output[:, 2]
             
-            L_up, L_down = 0.097, 0.157
-            H_left, H_right = 0.3, 0.1
+            L_up = 0.097  # Upper horizontal length
+            L_down = 0.174  # Lower horizontal length
+            H_left = 0.12  # Left vertical height
+            H_right = 0.019  # Right vertical height
             u_in = 0.05
             u_out = u_in * (H_left / H_right) * (L_up / L_down)
             
@@ -378,8 +383,10 @@ def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, w
             output = model(outlet)
             u_outlet, v_outlet, p_outlet = output[:, 0], output[:, 1], output[:, 2]
             
-            L_up, L_down = 0.097, 0.157
-            H_left, H_right = 0.3, 0.1
+            L_up = 0.097  # Upper horizontal length
+            L_down = 0.174  # Lower horizontal length
+            H_left = 0.12  # Left vertical height
+            H_right = 0.019  # Right vertical height
             u_in = 0.05
             u_out = u_in * (H_left / H_right) * (L_up / L_down)
             

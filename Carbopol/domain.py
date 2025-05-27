@@ -1,12 +1,13 @@
+#domain.py
 import numpy as np
 
 # Create a basic L-shaped domain with new dimensions
 def inside_L(x, y, W=0.157, L_v=0.3, L_h=0.157):
     # L-shaped pipe dimensions from user input
     L_up = 0.097  # Upper horizontal length
-    L_down = 0.157  # Lower horizontal length
-    H_left = 0.3  # Left vertical height
-    H_right = 0.1  # Right vertical height
+    L_down = 0.174  # Lower horizontal length
+    H_left = 0.12  # Left vertical height
+    H_right = 0.019  # Right vertical height
     
     # Main rectangle minus the corner rectangle
     main_rect = (0 <= x <= L_down) and (0 <= y <= H_left)
@@ -19,10 +20,10 @@ def generate_domain_points():
     domain_points = []
     
     # L-shaped pipe dimensions
-    L_up = 0.097
-    L_down = 0.157
-    H_left = 0.3
-    H_right = 0.1
+    L_up = 0.097  
+    L_down = 0.174 
+    H_left = 0.12  
+    H_right = 0.019
     
     # Generate uniform points
     n_uniform = 3000
@@ -79,9 +80,9 @@ def generate_boundary_points():
     
     # L-shaped pipe dimensions from user input
     L_up = 0.097  # Upper horizontal length
-    L_down = 0.157  # Lower horizontal length
-    H_left = 0.3  # Left vertical height
-    H_right = 0.1  # Right vertical height
+    L_down = 0.174  # Lower horizontal length
+    H_left = 0.12  # Left vertical height
+    H_right = 0.019  # Right vertical height
     
     # Define wall segments for the L-shape
     wall_segments = [

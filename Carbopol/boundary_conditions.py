@@ -1,4 +1,4 @@
-# Updated boundary_conditions.py for new L-pipe dimensions
+#boundary_conditions.py
 import torch
 
 if torch.cuda.is_available():
@@ -7,7 +7,7 @@ else:
     device = torch.device('cpu')
 
 def compute_momentum_bc(model, wall_points, wall_normals, restitution_coef=1.0, friction_coef=0.05):
-    print("Computing Carbopol momentum BC for updated L-shape domain...")
+    
     
     # Convert wall points and normals to tensors
     xy_wall = torch.tensor(wall_points, dtype=torch.float32, device=device, requires_grad=True)
