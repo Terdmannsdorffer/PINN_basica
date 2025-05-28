@@ -208,6 +208,9 @@ def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, w
     loss_history = []
     physics_loss_history = []
     bc_loss_history = []
+    rho = 0.101972  # Fluid density in kg/m^3 (adjust as needed)
+    g_x = 0.0
+    g_y = -9.81
     
     # Stage 1: Train with boundary conditions only
     print("Stage 1: Training with boundary conditions only (500 epochs)...")
@@ -290,8 +293,8 @@ def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, w
             eta_eff = (tau_y / (shear_rate + 1e-6)) + k * (shear_rate ** (n - 1))
 
             continuity = u_x + v_y
-            f_x = p_x - (eta_eff * u_x + eta_eff * u_y)
-            f_y = p_y - (eta_eff * v_x + eta_eff * v_y)
+            f_x = p_x - (eta_eff * u_x + eta_eff * u_y) + rho * g_x
+            f_y = p_y - (eta_eff * v_x + eta_eff * v_y) + rho * g_y
 
             physics_loss = torch.mean(continuity**2) + torch.mean(f_x**2 + f_y**2)
         
@@ -364,8 +367,8 @@ def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, w
             eta_eff = (tau_y / (shear_rate + 1e-6)) + k * (shear_rate ** (n - 1))
 
             continuity = u_x + v_y
-            f_x = p_x - (eta_eff * u_x + eta_eff * u_y)
-            f_y = p_y - (eta_eff * v_x + eta_eff * v_y)
+            f_x = p_x - (eta_eff * u_x + eta_eff * u_y) + rho * g_x
+            f_y = p_y - (eta_eff * v_x + eta_eff * v_y) + rho * g_y
 
             physics_loss = torch.mean(continuity**2) + torch.mean(f_x**2 + f_y**2)
         

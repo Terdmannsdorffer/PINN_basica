@@ -28,7 +28,7 @@ def compute_momentum_bc(model, wall_points, wall_normals, restitution_coef=1.0, 
     
     # Calculate shear rate at the wall - adjusted for smaller domain
     # Assuming characteristic length scale of 0.005 m for boundary layer
-    boundary_layer_thickness = 0.005
+    boundary_layer_thickness = 0.01
     shear_rate = tangential_vel_mag / boundary_layer_thickness
     
     # Carbopol wall slip behavior with updated rheological parameters

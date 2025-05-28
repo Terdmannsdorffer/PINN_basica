@@ -398,7 +398,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
         # Speed factor - adjust for faster/slower movement
         speed_factor = 0.01  # Reduced for smaller domain
         
-        # New positions for arrows
+        # New positions for arrows - initialize with same size as original
         new_x = []
         new_y = []
         new_u = []
@@ -441,6 +441,11 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
                             new_u.append(u_val / vel_mag)  # Normalized direction
                             new_v.append(v_val / vel_mag)  # Normalized direction
                             new_colors.append(vel_mag)
+                            # Update the original arrays
+                            arrows_x[i] = new_x_pos
+                            arrows_y[i] = new_y_pos
+                            arrows_u[i] = u_val / vel_mag
+                            arrows_v[i] = v_val / vel_mag
                             continue
             
             # If we reached here, either:
@@ -454,6 +459,7 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
             region = regions[reset_region]
             
             # Try to find a valid point in the chosen region
+            reset_x, reset_y = x, y  # Default to current position
             for _ in range(10):  # Try up to 10 times
                 reset_x = np.random.uniform(region["x_min"], region["x_max"])
                 reset_y = np.random.uniform(region["y_min"], region["y_max"])
@@ -482,12 +488,49 @@ def visualize_results(model, domain_points, inside_L, wall_segments, inlet_point
                         new_u.append(u_reset / vel_mag_reset)  # Normalized direction
                         new_v.append(v_reset / vel_mag_reset)  # Normalized direction
                         new_colors.append(vel_mag_reset)
+                        # Update the original arrays
+                        arrows_x[i] = reset_x
+                        arrows_y[i] = reset_y
+                        arrows_u[i] = u_reset / vel_mag_reset
+                        arrows_v[i] = v_reset / vel_mag_reset
+                    else:
+                        # Keep current position but with zero velocity
+                        new_x.append(x)
+                        new_y.append(y)
+                        new_u.append(0.0)
+                        new_v.append(0.0)
+                        new_colors.append(0.0)
+                        arrows_x[i] = x
+                        arrows_y[i] = y
+                        arrows_u[i] = 0.0
+                        arrows_v[i] = 0.0
+                else:
+                    # Keep current position but with zero velocity
+                    new_x.append(x)
+                    new_y.append(y)
+                    new_u.append(0.0)
+                    new_v.append(0.0)
+                    new_colors.append(0.0)
+                    arrows_x[i] = x
+                    arrows_y[i] = y
+                    arrows_u[i] = 0.0
+                    arrows_v[i] = 0.0
+            else:
+                # Keep current position but with zero velocity
+                new_x.append(x)
+                new_y.append(y)
+                new_u.append(0.0)
+                new_v.append(0.0)
+                new_colors.append(0.0)
+                arrows_x[i] = x
+                arrows_y[i] = y
+                arrows_u[i] = 0.0
+                arrows_v[i] = 0.0
         
-        # Update the arrow positions and directions
-        arrows_x[:] = new_x
-        arrows_y[:] = new_y
-        arrows_u[:] = new_u
-        arrows_v[:] = new_v
+        # Ensure we have exactly the same number of elements as the original quiver
+        assert len(new_x) == len(arrows_x), f"Size mismatch: {len(new_x)} != {len(arrows_x)}"
+        assert len(new_u) == len(arrows_x), f"Size mismatch: {len(new_u)} != {len(arrows_x)}"
+        assert len(new_v) == len(arrows_x), f"Size mismatch: {len(new_v)} != {len(arrows_x)}"
         
         # Update the quiver plot
         quiver.set_offsets(np.c_[new_x, new_y])

@@ -4,21 +4,21 @@ PIV vs PINN Comparison Metrics
 Number of comparison points: 2504
 
 U_COMPONENT:
-  R² Score: -88001.495148
-  RMSE: 0.684318 m/s
-  MAE: 0.677745 m/s (42733.50%)
+  R² Score: -41.710695
+  RMSE: 0.015076 m/s
+  MAE: 0.009844 m/s (620.70%)
 
 V_COMPONENT:
-  R² Score: -84336.668586
-  RMSE: 0.535385 m/s
-  MAE: 0.523316 m/s (40364.49%)
+  R² Score: -213.509405
+  RMSE: 0.027001 m/s
+  MAE: 0.023536 m/s (1815.41%)
 
 MAGNITUDE:
-  R² Score: -165868.763789
-  RMSE: 0.866137 m/s
-  MAE: 0.859506 m/s (36719.58%)
+  R² Score: -193.578357
+  RMSE: 0.029665 m/s
+  MAE: 0.026850 m/s (1147.06%)
 
 VECTOR ERROR:
-  Mean: 0.862161 m/s
-  Max: 1.078902 m/s
-  Std Dev: 0.107733 m/s
+  Mean: 0.027995 m/s
+  Max: 0.099349 m/s
+  Std Dev: 0.013139 m/s
