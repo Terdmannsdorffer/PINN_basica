@@ -155,7 +155,7 @@ def debug_piv_file(filepath):
 
 if __name__ == "__main__":
     # Debug your PIV file
-    piv_file = "PIV/PIVs_txts/p1/PIVlab_0900.txt"  # Update this path
+    piv_file = "PIV/PIVs_txts/p1/PIVlab_0901.txt"  # Update this path
     
     valid_data = debug_piv_file(piv_file)
     

@@ -361,7 +361,7 @@ def process_all_piv_files(input_dir, output_dir, plot_types=['vector'], n_proces
 # Example usage
 if __name__ == "__main__":
     # Process all PIV files in a directory
-    input_directory = ""  # Update this to your actual path
+    input_directory = "averaged_piv_results"  # Update this to your actual path
     output_directory = "piv_plots"
     
     # Process with debugging enabled and consistent velocity scale

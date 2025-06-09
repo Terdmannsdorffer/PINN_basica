@@ -603,7 +603,7 @@ def compare_piv_pinn(piv_filepath, pinn_filepath, output_dir='comparison_results
 # Example usage
 if __name__ == "__main__":
     # Example file paths - update these to your actual files
-    piv_file = "PIV/PIVs_txts/p1/PIVlab_0900.txt"
+    piv_file = "averaged_piv_steady_state.txt"#"PIV/PIVs_txts/p1/PIVlab_0900.txt"
     pinn_file = "data/pinn_velocity_for_piv.npz"
     
     # Run comparison
