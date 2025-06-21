@@ -75,8 +75,10 @@ class HyperparameterStudy:
                             exp_key = f"{arch_name}_{activation}_{epochs}_{inlet_vel}"
                             self.results[exp_key] = results
                             
-                            print(f"✅ Completed: Direction Acc: {results['direction_accuracy']:.1f}%, "
-                                  f"Overall Acc: {results['overall_accuracy']:.1f}%")
+                            print(f"✅ Completed: Dir: {results['direction_accuracy']:.1f}%, "
+                                  f"Overall: {results['overall_accuracy']:.1f}%, "
+                                  f"Mag: {results['magnitude_accuracy']:.1f}%"
+                                  f"{' (PIV)' if not results.get('pinn_only', False) else ' (PINN-only)'}")
                             
                         except Exception as e:
                             print(f"❌ Failed: {str(e)}")
@@ -167,6 +169,7 @@ class HyperparameterStudy:
                 'name': exp_name,
                 'direction_acc': metrics.get('direction_accuracy', 0),
                 'overall_acc': metrics.get('overall_accuracy', 0),
+                'magnitude_acc': metrics.get('magnitude_accuracy', 0),  # NEW
                 'architecture': metrics.get('architecture', ''),
                 'activation': metrics.get('activation', ''),
                 'epochs': metrics.get('epochs', 0),
@@ -177,13 +180,14 @@ class HyperparameterStudy:
         result_list.sort(key=lambda x: x['direction_acc'], reverse=True)
         
         print("\n🏆 TOP 10 RESULTS (by Direction Accuracy):")
-        print("-" * 100)
-        print(f"{'Rank':<4} {'Name':<35} {'Dir%':<6} {'Overall%':<8} {'Arch':<15} {'Act':<8}")
-        print("-" * 100)
+        print("-" * 110)
+        print(f"{'Rank':<4} {'Name':<35} {'Dir%':<6} {'Overall%':<8} {'Mag%':<6} {'Arch':<15} {'Act':<8}")
+        print("-" * 110)
         
         for i, result in enumerate(result_list[:10], 1):
             print(f"{i:<4} {result['name']:<35} {result['direction_acc']:<6.1f} "
-                  f"{result['overall_acc']:<8.1f} {result['architecture']:<15} {result['activation']:<8}")
+                  f"{result['overall_acc']:<8.1f} {result['magnitude_acc']:<6.1f} "
+                  f"{result['architecture']:<15} {result['activation']:<8}")
         
         # Analysis by category
         self._analyze_by_architecture(result_list)
