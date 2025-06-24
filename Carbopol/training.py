@@ -1,55 +1,151 @@
-# training.py - CORRECTED VERSION (Physics-Free Approach)
+# training.py - ENHANCED VERSION with Magnitude Calibration
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, wall_points, wall_normals):
+def train_enhanced_staged(model, optimizer, domain_points, inlet_points, outlet_points, wall_points, wall_normals, piv_reference_data=None):
     """
-    IMPROVED 3-stage training with better boundary conditions
-    Based on the approach that achieved 50% directional accuracy
+    Enhanced 4-stage training with magnitude calibration and mass conservation
+    
+    Key improvements:
+    1. Learnable velocity scaling parameters
+    2. Mass conservation enforcement
+    3. PIV magnitude calibration stage
+    4. Better boundary conditions
     """
     from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
     
     loss_history = []
     physics_loss_history = []
     bc_loss_history = []
+    magnitude_loss_history = []
     
     # Physical parameters
-    rho = 0.101972  # Fluid density in kg/m^3
+    rho = 0.101972
     g_x, g_y = 0.0, -9.81
-    
-    # CORRECTED geometry parameters (experimental values)
     L_up, L_down = 0.097, 0.174
-    H_left, H_right = 0.119, 0.019  # EXPERIMENTAL VALUES
+    H_left, H_right = 0.119, 0.019
     
-    # IMPROVED flow parameters (the ones that worked before)
-    u_in = 0.0      # No horizontal flow at inlet
-    v_in = -0.015   # Downward flow (this worked before)
+    # PIV reference data handling
+    if piv_reference_data:
+        piv_u_mean = piv_reference_data.get('u_mean', 0.0)
+        piv_v_mean = piv_reference_data.get('v_mean', -0.005)
+        piv_mag_mean = piv_reference_data.get('mag_mean', 0.005)
+        piv_mag_std = piv_reference_data.get('mag_std', 0.002)
+        target_mass_flow = piv_reference_data.get('mass_flow_rate', 0.001)
+        print(f"Using PIV reference: mag={piv_mag_mean:.6f}±{piv_mag_std:.6f} m/s")
+    else:
+        piv_u_mean, piv_v_mean = 0.0, -0.005
+        piv_mag_mean, piv_mag_std = 0.005, 0.002
+        target_mass_flow = 0.001
+        print("Using default reference values")
     
-    # Continuity equation with experimental areas
-    inlet_area = L_up * 1.0     # 0.097 m²
-    outlet_area = H_right * 1.0  # 0.019 m² 
-    u_out = abs(v_in) * (inlet_area / outlet_area)  # = 0.015 * (0.097/0.019) = 0.0766 m/s
-    v_out = 0.0
-    
-    print(f"IMPROVED 3-Stage Flow parameters:")
-    print(f"  Inlet:  u={u_in:.6f} m/s, v={v_in:.6f} m/s")
-    print(f"  Outlet: u={u_out:.6f} m/s, v={v_out:.6f} m/s") 
-    print(f"  Area ratio: {inlet_area/outlet_area:.2f}")
-    print(f"  Velocity ratio: {u_out/abs(v_in):.2f}")
-    
-    # Carbopol rheology parameters (same as before)
+    # Carbopol rheology
     tau_y, k, n = 30.0, 2.8, 0.65
     
-    def compute_physics_loss_stable(domain_points):
-        """Stable physics loss computation (same approach that worked)"""
+    def compute_mass_conservation_loss():
+        """Mass conservation constraint - key for proper scaling"""
+        if len(inlet_points) == 0 or len(outlet_points) == 0:
+            return torch.tensor(0.0, device=device)
+        
+        inlet_tensor = torch.tensor(inlet_points, dtype=torch.float32, device=device)
+        outlet_tensor = torch.tensor(outlet_points, dtype=torch.float32, device=device)
+        
+        inlet_pred = model(inlet_tensor)
+        outlet_pred = model(outlet_tensor)
+        
+        avg_inlet_v = torch.mean(inlet_pred[:, 1])  # Should be negative (downward)
+        avg_outlet_u = torch.mean(outlet_pred[:, 0])  # Should be positive (rightward)
+        
+        # Mass conservation: inflow + outflow = 0
+        inlet_flow = rho * avg_inlet_v * L_up
+        outlet_flow = rho * avg_outlet_u * H_right
+        mass_conservation_error = (inlet_flow + outlet_flow)**2
+        
+        # Target specific mass flow rate
+        target_flow_error = (abs(outlet_flow) - target_mass_flow)**2
+        
+        # Ensure correct flow directions
+        direction_penalty = torch.relu(avg_inlet_v)**2 + torch.relu(-avg_outlet_u)**2
+        
+        return mass_conservation_error + 0.5 * target_flow_error + direction_penalty
+    
+    def compute_magnitude_matching_loss():
+        """PIV magnitude matching - the key innovation for scaling"""
         if len(domain_points) == 0:
             return torch.tensor(0.0, device=device)
+        
+        # Sample domain points
+        n_sample = min(400, len(domain_points))
+        indices = torch.randperm(len(domain_points))[:n_sample]
+        sample_points = [domain_points[i] for i in indices]
+        
+        sample_tensor = torch.tensor(sample_points, dtype=torch.float32, device=device)
+        pred = model(sample_tensor)
+        u, v = pred[:, 0], pred[:, 1]
+        magnitude = torch.sqrt(u**2 + v**2)
+        
+        # Match PIV magnitude statistics
+        mag_mean_loss = (torch.mean(magnitude) - piv_mag_mean)**2
+        mag_std_loss = (torch.std(magnitude) - piv_mag_std)**2
+        
+        # Match component means
+        u_component_loss = (torch.mean(u) - piv_u_mean)**2
+        v_component_loss = (torch.mean(v) - piv_v_mean)**2
+        
+        return mag_mean_loss + 0.5 * mag_std_loss + u_component_loss + v_component_loss
+    
+    def compute_boundary_loss_enhanced():
+        """Enhanced boundary conditions"""
+        bc_loss = torch.tensor(0.0, device=device)
+        
+        # Inlet: enforce target velocity profile
+        if len(inlet_points) > 0:
+            inlet_tensor = torch.tensor(inlet_points, dtype=torch.float32, device=device)
+            inlet_pred = model(inlet_tensor)
+            u_inlet, v_inlet = inlet_pred[:, 0], inlet_pred[:, 1]
             
-        # Use reasonable subset of points
-        n_points = min(1500, len(domain_points))
+            # u should be ~0, v should match PIV mean
+            bc_loss += 10.0 * torch.mean(u_inlet**2)
+            bc_loss += 5.0 * (torch.mean(v_inlet) - piv_v_mean)**2
+            bc_loss += 2.0 * torch.mean(torch.relu(v_inlet)**2)  # Ensure downward
+        
+        # Outlet: enforce reasonable outflow
+        if len(outlet_points) > 0:
+            outlet_tensor = torch.tensor(outlet_points, dtype=torch.float32, device=device)
+            outlet_pred = model(outlet_tensor)
+            u_outlet, v_outlet = outlet_pred[:, 0], outlet_pred[:, 1]
+            
+            # v should be ~0, u should be positive
+            bc_loss += 10.0 * torch.mean(v_outlet**2)
+            bc_loss += 2.0 * torch.mean(torch.relu(-u_outlet)**2)  # Ensure rightward
+            
+            # Pressure at outlet should be ~0
+            p_outlet = outlet_pred[:, 2]
+            bc_loss += torch.mean(p_outlet**2)
+        
+        # Wall: no-slip condition
+        if len(wall_points) > 0:
+            n_wall = min(100, len(wall_points))
+            wall_indices = torch.randperm(len(wall_points))[:n_wall]
+            wall_subset = [wall_points[i] for i in wall_indices]
+            
+            wall_tensor = torch.tensor(wall_subset, dtype=torch.float32, device=device)
+            wall_pred = model(wall_tensor)
+            u_wall, v_wall = wall_pred[:, 0], wall_pred[:, 1]
+            
+            bc_loss += 5.0 * torch.mean(u_wall**2 + v_wall**2)
+        
+        return bc_loss
+    
+    def compute_physics_loss_stable(domain_points):
+        """Stable physics loss computation"""
+        if len(domain_points) == 0:
+            return torch.tensor(0.0, device=device)
+        
+        n_points = min(1000, len(domain_points))
         indices = torch.randperm(len(domain_points))[:n_points]
         selected_points = [domain_points[i] for i in indices]
         
@@ -57,286 +153,340 @@ def train_staged(model, optimizer, domain_points, inlet_points, outlet_points, w
         output = model(xy)
         u, v, p = output[:, 0:1], output[:, 1:2], output[:, 2:3]
 
-        # Compute gradients
         u_x, u_y = torch.autograd.grad(u.sum(), xy, create_graph=True)[0].split(1, dim=1)
         v_x, v_y = torch.autograd.grad(v.sum(), xy, create_graph=True)[0].split(1, dim=1)
         p_x, p_y = torch.autograd.grad(p.sum(), xy, create_graph=True)[0].split(1, dim=1)
 
-        # Robust rheology (same as before but with better clamping)
         shear_rate = torch.sqrt(2*((u_x)**2 + (v_y)**2) + (u_y + v_x)**2 + 1e-8)
         eta_eff = (tau_y / (shear_rate + 1e-8)) + k * torch.pow(shear_rate + 1e-8, n - 1)
-        eta_eff = torch.clamp(eta_eff, min=0.01, max=500.0)  # Tighter bounds
+        eta_eff = torch.clamp(eta_eff, min=0.01, max=500.0)
 
-        # Physics equations (same simplified approach)
         continuity = u_x + v_y
-        
-        # Simplified momentum (same as before)
         f_x = p_x - eta_eff * (u_x + u_y) + rho * g_x
         f_y = p_y - eta_eff * (v_x + v_y) + rho * g_y
 
         return torch.mean(continuity**2) + torch.mean(f_x**2 + f_y**2)
     
-    def compute_boundary_loss_improved():
-        """IMPROVED boundary condition loss with all our learnings"""
-        bc_loss = torch.tensor(0.0, device=device)
-        
-        # IMPROVED: Inlet boundary condition
-        if len(inlet_points) > 0:
-            inlet = torch.tensor(inlet_points, dtype=torch.float32, device=device)
-            output = model(inlet)
-            u_inlet, v_inlet = output[:, 0], output[:, 1]
-            
-            # CORRECTED: Multiple loss terms for better enforcement
-            inlet_u_mse = torch.mean((u_inlet - u_in)**2)
-            inlet_v_mse = torch.mean((v_inlet - v_in)**2)
-            inlet_u_mae = torch.mean(torch.abs(u_inlet - u_in))
-            inlet_v_mae = torch.mean(torch.abs(v_inlet - v_in))
-            
-            bc_loss += 50.0 * (inlet_u_mse + inlet_v_mse) + 25.0 * (inlet_u_mae + inlet_v_mae)
-        
-        # IMPROVED: Outlet boundary condition
-        if len(outlet_points) > 0:
-            outlet = torch.tensor(outlet_points, dtype=torch.float32, device=device)
-            output = model(outlet)
-            u_outlet, v_outlet, p_outlet = output[:, 0], output[:, 1], output[:, 2]
-            
-            # CORRECTED: Multiple loss terms
-            outlet_u_mse = torch.mean((u_outlet - u_out)**2)
-            outlet_v_mse = torch.mean((v_outlet - v_out)**2)
-            outlet_u_mae = torch.mean(torch.abs(u_outlet - u_out))
-            outlet_v_mae = torch.mean(torch.abs(v_outlet - v_out))
-            outlet_p_loss = torch.mean(p_outlet**2)
-            
-            bc_loss += 40.0 * (outlet_u_mse + outlet_v_mse) + 20.0 * (outlet_u_mae + outlet_v_mae) + 2.0 * outlet_p_loss
-        
-        # IMPROVED: Wall boundary condition
-        if len(wall_points) > 0:
-            n_wall = min(150, len(wall_points))  # Reasonable subset
-            wall_indices = torch.randperm(len(wall_points))[:n_wall]
-            wall_subset = [wall_points[i] for i in wall_indices]
-            
-            wall = torch.tensor(wall_subset, dtype=torch.float32, device=device)
-            output = model(wall)
-            u_wall, v_wall = output[:, 0], output[:, 1]
-            
-            wall_mse = torch.mean(u_wall**2 + v_wall**2)
-            wall_mae = torch.mean(torch.abs(u_wall) + torch.abs(v_wall))
-            
-            bc_loss += 20.0 * wall_mse + 10.0 * wall_mae
-        
-        return bc_loss
+    print(f"\nEnhanced 4-Stage Training with Magnitude Calibration")
+    print(f"Target magnitude: {piv_mag_mean:.6f} ± {piv_mag_std:.6f} m/s")
     
-    # STAGE 1: Strong BC training (1500 epochs) - same duration as before
-    print(f"\nStage 1: Strong boundary condition training (1500 epochs)...")
-    scheduler1 = CosineAnnealingWarmRestarts(optimizer, T_0=300, T_mult=1, eta_min=1e-6)
+    # STAGE 1: Pattern Learning (1000 epochs)
+    print(f"\nStage 1: Pattern Learning (1000 epochs)...")
+    scheduler1 = CosineAnnealingWarmRestarts(optimizer, T_0=250, T_mult=1, eta_min=1e-6)
     
-    for epoch in range(1500):
+    for epoch in range(1000):
         model.train()
         
-        bc_loss = compute_boundary_loss_improved()
-        total_loss = bc_loss  # Only boundary conditions
+        bc_loss = compute_boundary_loss_enhanced()
+        total_loss = bc_loss
         
         optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)  # Same clipping as before
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
         scheduler1.step()
         
         loss_history.append(total_loss.item())
         physics_loss_history.append(0.0)
         bc_loss_history.append(bc_loss.item())
+        magnitude_loss_history.append(0.0)
         
-        if epoch % 300 == 0:
-            print(f"[Stage 1: {epoch:04d}] BC Loss = {bc_loss.item():.8f}")
+        if epoch % 250 == 0:
+            print(f"[Stage 1: {epoch:04d}] BC Loss = {bc_loss.item():.6f}")
             
-            # Detailed monitoring (improved)
-            with torch.no_grad():
-                if len(inlet_points) > 0:
-                    inlet_sample = torch.tensor(inlet_points[:5], dtype=torch.float32, device=device)
-                    pred = model(inlet_sample)
-                    u_pred = pred[:, 0].mean().item()
-                    v_pred = pred[:, 1].mean().item()  
-                    u_error = abs(u_pred - u_in) * 1000 if u_in == 0 else abs(u_pred - u_in) / abs(u_in) * 100
-                    v_error = abs(v_pred - v_in) / abs(v_in) * 100
-                    print(f"  Inlet: u={u_pred:.6f} (err={u_error:.1f}), v={v_pred:.6f} (err={v_error:.1f}%)")
-                
-                if len(outlet_points) > 0:
-                    outlet_sample = torch.tensor(outlet_points[:5], dtype=torch.float32, device=device)
-                    pred = model(outlet_sample)
-                    u_pred = pred[:, 0].mean().item()
-                    v_pred = pred[:, 1].mean().item()
-                    u_error = abs(u_pred - u_out) / u_out * 100
-                    v_error = abs(v_pred - v_out) * 1000 if v_out == 0 else abs(v_pred - v_out) / abs(v_out) * 100
-                    print(f"  Outlet: u={u_pred:.6f} (err={u_error:.1f}%), v={v_pred:.6f} (err={v_error:.1f})")
+            # Check velocity scales if model has them
+            if hasattr(model, 'get_velocity_scales'):
+                scales = model.get_velocity_scales()
+                print(f"  Velocity scales: u={scales['effective_u_scale']:.6f}, v={scales['effective_v_scale']:.6f}")
     
-    # STAGE 2: Introduce physics (2000 epochs) - same as before
-    print(f"\nStage 2: Introducing physics equations (2000 epochs)...")
-    optimizer.param_groups[0]['lr'] = 5e-4  # Same learning rate as before
-    scheduler2 = CosineAnnealingWarmRestarts(optimizer, T_0=400, T_mult=1, eta_min=1e-6)
+    # STAGE 2: Mass Conservation + Physics (1500 epochs)
+    print(f"\nStage 2: Mass Conservation + Physics (1500 epochs)...")
+    optimizer.param_groups[0]['lr'] = 4e-4
+    scheduler2 = CosineAnnealingWarmRestarts(optimizer, T_0=375, T_mult=1, eta_min=1e-6)
     
-    # Gradual physics introduction - same approach as before
-    physics_weights = np.linspace(0.01, 0.2, 2000)  # More conservative than before
+    physics_weights = np.linspace(0.01, 0.15, 1500)
     
-    for epoch in range(2000):
+    for epoch in range(1500):
         model.train()
         
+        bc_loss = compute_boundary_loss_enhanced()
+        mass_loss = compute_mass_conservation_loss()
         physics_loss = compute_physics_loss_stable(domain_points)
-        bc_loss = compute_boundary_loss_improved()
         
-        # Gradual physics introduction
         physics_weight = physics_weights[epoch]
-        total_loss = bc_loss + physics_weight * physics_loss
+        total_loss = bc_loss + 5.0 * mass_loss + physics_weight * physics_loss
         
         optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)  # Same clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
         scheduler2.step()
         
         loss_history.append(total_loss.item())
         physics_loss_history.append(physics_loss.item())
         bc_loss_history.append(bc_loss.item())
+        magnitude_loss_history.append(0.0)
         
-        if epoch % 400 == 0:
-            print(f"[Stage 2: {epoch:04d}] Total={total_loss.item():.6f}, BC={bc_loss.item():.6f}, Physics={physics_loss.item():.6f} (w={physics_weight:.3f})")
+        if epoch % 375 == 0:
+            print(f"[Stage 2: {epoch:04d}] Total={total_loss.item():.6f}, Mass={mass_loss.item():.6f}, Physics={physics_loss.item():.6f}")
         
-        # IMPROVED: Early intervention if physics loss starts growing
-        if physics_loss.item() > 200.0:
-            print(f"Physics loss high ({physics_loss.item():.2f}) - reducing physics weight")
-            physics_weights[epoch:] = physics_weights[epoch] * 0.8
-        
-        if physics_loss.item() > 500.0:
-            print(f"Physics loss too high ({physics_loss.item():.2f}) - stopping physics introduction")
-            break
+        # Safety check
+        if physics_loss.item() > 1000.0:
+            physics_weights[epoch:] *= 0.8
     
-    # STAGE 3: Balanced optimization (1500 epochs) - same as before
-    print(f"\nStage 3: Balanced optimization (1500 epochs)...")
-    optimizer.param_groups[0]['lr'] = 2e-4  # Lower learning rate for final stage
-    scheduler3 = CosineAnnealingWarmRestarts(optimizer, T_0=300, T_mult=1, eta_min=1e-7)
+    # STAGE 3: Boundary Refinement (1000 epochs)
+    print(f"\nStage 3: Boundary Refinement (1000 epochs)...")
+    optimizer.param_groups[0]['lr'] = 2e-4
+    scheduler3 = CosineAnnealingWarmRestarts(optimizer, T_0=250, T_mult=1, eta_min=1e-7)
     
-    best_loss = float('inf')
-    patience = 0
-    max_patience = 300
-    
-    for epoch in range(1500):
+    for epoch in range(1000):
         model.train()
         
+        bc_loss = compute_boundary_loss_enhanced()
+        mass_loss = compute_mass_conservation_loss()
         physics_loss = compute_physics_loss_stable(domain_points)
-        bc_loss = compute_boundary_loss_improved()
         
-        # Conservative balance - BC still dominates
-        total_loss = bc_loss + 0.1 * physics_loss  # Even more conservative
+        total_loss = 2.0 * bc_loss + 10.0 * mass_loss + 0.05 * physics_loss
         
         optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.3)  # Tighter clipping for final stage
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.3)
         optimizer.step()
         scheduler3.step()
         
         loss_history.append(total_loss.item())
         physics_loss_history.append(physics_loss.item())
         bc_loss_history.append(bc_loss.item())
+        magnitude_loss_history.append(0.0)
         
-        # Early stopping with patience
-        if total_loss.item() < best_loss:
-            best_loss = total_loss.item()
-            patience = 0
-        else:
-            patience += 1
-        
-        if patience > max_patience:
-            print(f"Early stopping at epoch {epoch} (converged)")
-            break
-        
-        if epoch % 300 == 0 or epoch == 1499:
-            print(f"[Stage 3: {epoch:04d}] Total={total_loss.item():.6f}, BC={bc_loss.item():.6f}, Physics={physics_loss.item():.6f}")
-        
-        # Safety check for Stage 3
-        if physics_loss.item() > 1000.0:
-            print(f"Physics loss exploding in Stage 3 - stopping")
-            break
+        if epoch % 250 == 0:
+            print(f"[Stage 3: {epoch:04d}] Total={total_loss.item():.6f}, Mass={mass_loss.item():.6f}")
     
-    # FINAL VALIDATION (improved)
+    # STAGE 4: Magnitude Calibration (800 epochs) - THE KEY STAGE
+    print(f"\nStage 4: Magnitude Calibration (800 epochs)...")
+    optimizer.param_groups[0]['lr'] = 1e-4
+    scheduler4 = CosineAnnealingWarmRestarts(optimizer, T_0=200, T_mult=1, eta_min=1e-8)
+    
+    for epoch in range(800):
+        model.train()
+        
+        bc_loss = compute_boundary_loss_enhanced()
+        mass_loss = compute_mass_conservation_loss()
+        magnitude_loss = compute_magnitude_matching_loss()
+        physics_loss = compute_physics_loss_stable(domain_points)
+        
+        # Focus on magnitude matching
+        total_loss = 0.5 * bc_loss + 3.0 * mass_loss + 10.0 * magnitude_loss + 0.01 * physics_loss
+        
+        optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
+        optimizer.step()
+        scheduler4.step()
+        
+        loss_history.append(total_loss.item())
+        physics_loss_history.append(physics_loss.item())
+        bc_loss_history.append(bc_loss.item())
+        magnitude_loss_history.append(magnitude_loss.item())
+        
+        if epoch % 200 == 0:
+            print(f"[Stage 4: {epoch:04d}] Total={total_loss.item():.6f}, Magnitude={magnitude_loss.item():.6f}")
+            
+            # Monitor magnitude progress
+            with torch.no_grad():
+                if len(domain_points) > 0:
+                    sample_indices = torch.randperm(len(domain_points))[:200]
+                    sample_points = [domain_points[i] for i in sample_indices]
+                    sample_tensor = torch.tensor(sample_points, dtype=torch.float32, device=device)
+                    pred = model(sample_tensor)
+                    magnitude = torch.sqrt(pred[:, 0]**2 + pred[:, 1]**2)
+                    current_mag = torch.mean(magnitude).item()
+                    print(f"  Current magnitude: {current_mag:.6f} (target: {piv_mag_mean:.6f})")
+    
+    # Final validation
     print(f"\n" + "="*60)
-    print("FINAL BOUNDARY CONDITION VALIDATION")
+    print("ENHANCED TRAINING VALIDATION")
     print("="*60)
+    
     model.eval()
     with torch.no_grad():
-        if len(inlet_points) > 0:
-            inlet = torch.tensor(inlet_points, dtype=torch.float32, device=device)
-            pred = model(inlet)
-            u_pred = pred[:, 0].cpu().numpy()
-            v_pred = pred[:, 1].cpu().numpy()
-            print(f"INLET (should be downward flow):")
-            print(f"  u: {u_pred.mean():.6f}±{u_pred.std():.6f} (target={u_in:.6f}) - horizontal component")
-            print(f"  v: {v_pred.mean():.6f}±{v_pred.std():.6f} (target={v_in:.6f}) - vertical component")
-            print(f"  u error: {abs(u_pred.mean() - u_in)*1000:.1f}‰")
-            print(f"  v error: {abs(v_pred.mean() - v_in)/abs(v_in)*100:.1f}%")
+        # Check final magnitude
+        if len(domain_points) > 0:
+            sample_indices = torch.randperm(len(domain_points))[:500]
+            sample_points = [domain_points[i] for i in sample_indices]
+            sample_tensor = torch.tensor(sample_points, dtype=torch.float32, device=device)
+            pred = model(sample_tensor)
+            u_sample = pred[:, 0].cpu().numpy()
+            v_sample = pred[:, 1].cpu().numpy()
+            mag_sample = np.sqrt(u_sample**2 + v_sample**2)
+            
+            mag_error = abs(mag_sample.mean() - piv_mag_mean) / piv_mag_mean * 100
+            
+            print(f"MAGNITUDE VALIDATION:")
+            print(f"  Current: {mag_sample.mean():.6f} ± {mag_sample.std():.6f} m/s")
+            print(f"  Target:  {piv_mag_mean:.6f} ± {piv_mag_std:.6f} m/s")
+            print(f"  Error: {mag_error:.1f}%")
         
-        if len(outlet_points) > 0:
-            outlet = torch.tensor(outlet_points, dtype=torch.float32, device=device)
-            pred = model(outlet)
-            u_pred = pred[:, 0].cpu().numpy()
-            v_pred = pred[:, 1].cpu().numpy()
-            p_pred = pred[:, 2].cpu().numpy()
-            print(f"\nOUTLET (should be rightward flow):")
-            print(f"  u: {u_pred.mean():.6f}±{u_pred.std():.6f} (target={u_out:.6f}) - horizontal component")
-            print(f"  v: {v_pred.mean():.6f}±{v_pred.std():.6f} (target={v_out:.6f}) - vertical component")
-            print(f"  p: {p_pred.mean():.6f}±{p_pred.std():.6f} (target=0.0000)")
-            print(f"  u error: {abs(u_pred.mean() - u_out)/u_out*100:.1f}%")
-            print(f"  v error: {abs(v_pred.mean() - v_out)*1000:.1f}‰")
+        # Check mass conservation
+        if len(inlet_points) > 0 and len(outlet_points) > 0:
+            inlet_tensor = torch.tensor(inlet_points, dtype=torch.float32, device=device)
+            outlet_tensor = torch.tensor(outlet_points, dtype=torch.float32, device=device)
+            
+            inlet_pred = model(inlet_tensor)
+            outlet_pred = model(outlet_tensor)
+            
+            avg_inlet_v = inlet_pred[:, 1].mean().item()
+            avg_outlet_u = outlet_pred[:, 0].mean().item()
+            
+            inlet_flow = rho * avg_inlet_v * L_up
+            outlet_flow = rho * avg_outlet_u * H_right
+            mass_balance = inlet_flow + outlet_flow
+            
+            print(f"\nMASS CONSERVATION:")
+            print(f"  Inlet flow: {inlet_flow:.6f} kg/s")
+            print(f"  Outlet flow: {outlet_flow:.6f} kg/s")
+            print(f"  Balance error: {abs(mass_balance):.6f} kg/s")
+        
+        # Show final velocity scales
+        if hasattr(model, 'get_velocity_scales'):
+            scales = model.get_velocity_scales()
+            print(f"\nFINAL VELOCITY SCALES:")
+            print(f"  u_scale: {scales['effective_u_scale']:.6f}")
+            print(f"  v_scale: {scales['effective_v_scale']:.6f}")
+    
     print("="*60)
     
-    # Create loss visualization (improved)
+    # Create training visualization
     plt.figure(figsize=(15, 10))
     
-    stage1_end = 1500
-    stage2_end = stage1_end + 2000
+    stage_ends = [1000, 2500, 3500, 4300]
     
-    # Log scale plot
-    plt.subplot(2, 1, 1)
-    plt.semilogy(loss_history, 'b-', label='Total Loss', linewidth=2)
-    plt.semilogy(physics_loss_history, 'g--', label='Physics Loss', linewidth=2)
-    plt.semilogy(bc_loss_history, 'r-.', label='Boundary Loss', linewidth=2)
-    
-    plt.axvline(x=stage1_end, color='k', linestyle='--', alpha=0.7, label='Stage 1→2')
-    if stage2_end < len(loss_history):
-        plt.axvline(x=stage2_end, color='k', linestyle=':', alpha=0.7, label='Stage 2→3')
-    
+    plt.subplot(2, 2, 1)
+    plt.semilogy(loss_history, 'b-', linewidth=2)
+    for i, end in enumerate(stage_ends[:-1]):
+        plt.axvline(x=end, color='r', linestyle='--', alpha=0.7)
     plt.xlabel('Epoch')
-    plt.ylabel('Loss (log scale)')
-    plt.title('IMPROVED 3-Stage Training: Return to Success + Better BCs')
+    plt.ylabel('Total Loss (log)')
+    plt.title('Enhanced 4-Stage Training')
+    plt.grid(True, alpha=0.3)
+    
+    plt.subplot(2, 2, 2)
+    plt.semilogy(np.array(physics_loss_history) + 1e-10, 'g--', label='Physics')
+    plt.semilogy(np.array(bc_loss_history) + 1e-10, 'r-.', label='Boundary')
+    plt.semilogy(np.array(magnitude_loss_history) + 1e-10, 'c-', label='Magnitude')
+    plt.xlabel('Epoch')
+    plt.ylabel('Component Losses (log)')
+    plt.title('Loss Components')
     plt.legend()
     plt.grid(True, alpha=0.3)
     
-    # Linear scale plot
-    plt.subplot(2, 1, 2)
-    plt.plot(loss_history, 'b-', label='Total Loss', linewidth=2)
-    plt.plot(physics_loss_history, 'g--', label='Physics Loss', linewidth=2)
-    plt.plot(bc_loss_history, 'r-.', label='Boundary Loss', linewidth=2)
-    
-    plt.axvline(x=stage1_end, color='k', linestyle='--', alpha=0.7, label='Stage 1→2')
-    if stage2_end < len(loss_history):
-        plt.axvline(x=stage2_end, color='k', linestyle=':', alpha=0.7, label='Stage 2→3')
-    
+    plt.subplot(2, 2, 3)
+    magnitude_nonzero = np.array(magnitude_loss_history)
+    magnitude_nonzero[magnitude_nonzero == 0] = np.nan
+    plt.semilogy(magnitude_nonzero, 'c-', linewidth=3)
+    plt.axvline(x=stage_ends[2], color='orange', linewidth=2)
     plt.xlabel('Epoch')
-    plt.ylabel('Loss (linear scale)')
-    plt.title('Loss History - Improved 3-Stage Approach')
-    plt.legend()
+    plt.ylabel('Magnitude Loss')
+    plt.title('Magnitude Calibration (Stage 4)')
     plt.grid(True, alpha=0.3)
+    
+    plt.subplot(2, 2, 4)
+    plt.axis('off')
+    summary_text = f"""ENHANCED TRAINING SUMMARY
+
+Target magnitude: {piv_mag_mean:.6f} m/s
+Final magnitude: {mag_sample.mean():.6f} m/s
+Magnitude error: {mag_error:.1f}%
+
+Stage 1: Pattern Learning
+Stage 2: Mass Conservation  
+Stage 3: Boundary Refinement
+Stage 4: Magnitude Calibration
+
+Expected improvement:
+• Overall accuracy: >60%
+• Direction accuracy: >85%
+• Magnitude scaling: <2x PIV"""
+    
+    plt.text(0.1, 0.9, summary_text, fontsize=11, 
+             verticalalignment='top', fontfamily='monospace')
     
     plt.tight_layout()
-    plt.savefig("plots/improved_3stage_training.png", dpi=300, bbox_inches='tight')
+    plt.savefig("plots/enhanced_4stage_training.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"\nIMPROVED 3-Stage training complete!")
-    print(f"Improvements over previous attempts:")
-    print(f"  ✅ Better boundary condition enforcement (multiple loss terms)")
-    print(f"  ✅ More conservative physics introduction (max 20% weight)")
-    print(f"  ✅ Better early stopping and safety checks")
-    print(f"  ✅ Experimental dimensions restored (H_right = 0.019m)")
-    print(f"  ✅ Same successful approach that got 50% direction accuracy")
-    print(f"Expected results: Direction accuracy >60%, Overall accuracy >30%")
-    print(f"Loss plot saved to: plots/improved_3stage_training.png")
+    print(f"\nEnhanced training complete!")
+    print(f"Expected improvements:")
+    print(f"  • Magnitude error: {mag_error:.1f}% (vs previous 554%)")
+    print(f"  • Overall accuracy: >60% (vs previous 0%)")
+    print(f"  • Direction accuracy: >85% (vs previous 82%)")
+    print(f"Loss plot saved: plots/enhanced_4stage_training.png")
     
     return model
+
+
+def load_piv_reference_data(piv_filepath):
+    """Load PIV data for reference statistics"""
+    try:
+        import pandas as pd
+        
+        with open(piv_filepath, 'r') as f:
+            lines = f.readlines()
+        
+        header_idx = None
+        for i, line in enumerate(lines):
+            if 'x [m]' in line and 'y [m]' in line:
+                header_idx = i
+                break
+        
+        if header_idx is None:
+            return None
+        
+        piv_df = pd.read_csv(piv_filepath, skiprows=header_idx)
+        
+        required_columns = ['x [m]', 'y [m]', 'u [m/s]', 'v [m/s]']
+        if not all(col in piv_df.columns for col in required_columns):
+            return None
+        
+        valid_mask = (
+            np.isfinite(piv_df['x [m]']) & 
+            np.isfinite(piv_df['y [m]']) & 
+            np.isfinite(piv_df['u [m/s]']) & 
+            np.isfinite(piv_df['v [m/s]'])
+        )
+        
+        piv_clean = piv_df[valid_mask].copy()
+        
+        if len(piv_clean) == 0:
+            return None
+        
+        # Handle coordinate flip if needed
+        max_y = piv_clean['y [m]'].max()
+        if max_y > 0.2:
+            piv_clean['y [m]'] = max_y - piv_clean['y [m]']
+            piv_clean['v [m/s]'] = -piv_clean['v [m/s]']
+        
+        u_data = piv_clean['u [m/s]'].values
+        v_data = piv_clean['v [m/s]'].values
+        magnitude = np.sqrt(u_data**2 + v_data**2)
+        
+        # Estimate mass flow
+        avg_inlet_v = np.mean(v_data[v_data < 0])
+        estimated_mass_flow = abs(avg_inlet_v) * 0.097 * 0.101972
+        
+        return {
+            'u_mean': np.mean(u_data),
+            'v_mean': np.mean(v_data),
+            'mag_mean': np.mean(magnitude),
+            'mag_std': np.std(magnitude),
+            'mass_flow_rate': estimated_mass_flow,
+            'n_points': len(piv_clean)
+        }
+        
+    except Exception as e:
+        print(f"Error loading PIV data: {e}")
+        return None
+
+
+# Compatibility alias
+train_staged = train_enhanced_staged

@@ -1,4 +1,4 @@
-#model.py
+# model.py - ENHANCED VERSION with Velocity Scaling
 import torch
 import torch.nn as nn
 import numpy as np
@@ -33,7 +33,8 @@ class Swish(nn.Module):
     def forward(self, x):
         return x * torch.sigmoid(self.beta * x)
 
-class DeepPINN(nn.Module):
+
+class EnhancedDeepPINN(nn.Module):
     def __init__(
             self, input_dim=2, 
             output_dim=3, 
@@ -41,10 +42,11 @@ class DeepPINN(nn.Module):
             fourier_mapping_size=256, 
             fourier_scale=10.0, 
             activation='swish', 
-            beta=1.0
+            beta=1.0,
+            piv_velocity_stats=None  # {'u_mean': float, 'v_mean': float, 'mag_mean': float, 'mag_std': float}
         ):
-        """Enhanced Physics-Informed Neural Network with Fourier feature mapping."""
-        super(DeepPINN, self).__init__()
+        """Enhanced Physics-Informed Neural Network with velocity scaling and magnitude matching."""
+        super(EnhancedDeepPINN, self).__init__()
         
         # Activation function selection
         if activation.lower() == 'tanh':
@@ -83,11 +85,26 @@ class DeepPINN(nn.Module):
             if hidden_layers[i] == hidden_layers[i+1]:
                 self.hidden_layers.append(ResidualBlock(hidden_layers[i]))
         
-        # Output layer
+        # Output layer (produces normalized velocities and pressure)
         self.output_layer = nn.Linear(hidden_layers[-1], output_dim)
+        
+        # ENHANCEMENT 1: Learnable velocity scaling parameters
+        self.u_scale = nn.Parameter(torch.tensor(1.0))  # Horizontal velocity scale
+        self.v_scale = nn.Parameter(torch.tensor(1.0))  # Vertical velocity scale
+        self.global_scale = nn.Parameter(torch.tensor(1.0))  # Global velocity scale
+        
+        # ENHANCEMENT 2: Pressure scaling
+        self.pressure_scale = nn.Parameter(torch.tensor(1.0))
+        
+        # Store PIV statistics for initialization and calibration
+        self.piv_stats = piv_velocity_stats
         
         # Initialize weights for better convergence
         self._initialize_weights()
+        
+        # ENHANCEMENT 3: Initialize with PIV statistics if available
+        if piv_velocity_stats is not None:
+            self._initialize_with_piv_statistics()
     
     def _initialize_weights(self):
         """Xavier initialization for better training convergence."""
@@ -96,6 +113,30 @@ class DeepPINN(nn.Module):
                 nn.init.xavier_normal_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
+    
+    def _initialize_with_piv_statistics(self):
+        """ENHANCEMENT 4: Initialize network to produce PIV-like velocities"""
+        if self.piv_stats is None:
+            return
+            
+        with torch.no_grad():
+            # Initialize velocity scaling parameters
+            self.u_scale.data = torch.tensor(abs(self.piv_stats.get('u_mean', 0.005)))
+            self.v_scale.data = torch.tensor(abs(self.piv_stats.get('v_mean', 0.005)))
+            self.global_scale.data = torch.tensor(self.piv_stats.get('mag_mean', 0.005))
+            
+            # Initialize output layer bias to produce realistic velocities
+            self.output_layer.bias[0] = 0.0  # u-component (will be scaled)
+            self.output_layer.bias[1] = -1.0  # v-component (negative for downward flow)
+            self.output_layer.bias[2] = 0.0  # pressure
+            
+            # Scale output weights to reasonable range
+            self.output_layer.weight[:2, :] *= 0.1  # Smaller initial velocity weights
+            
+        print(f"Initialized with PIV statistics:")
+        print(f"  u_scale: {self.u_scale.item():.6f}")
+        print(f"  v_scale: {self.v_scale.item():.6f}")
+        print(f"  global_scale: {self.global_scale.item():.6f}")
     
     def forward(self, x):
         # Apply Fourier feature mapping
@@ -108,10 +149,39 @@ class DeepPINN(nn.Module):
         for layer in self.hidden_layers:
             x = layer(x)
         
-        # Apply output layer
-        x = self.output_layer(x)
+        # Apply output layer (produces normalized outputs)
+        raw_output = self.output_layer(x)
         
-        return x
+        # ENHANCEMENT 5: Apply velocity scaling
+        u_raw, v_raw, p_raw = raw_output[:, 0:1], raw_output[:, 1:2], raw_output[:, 2:3]
+        
+        # Scale velocities with learnable parameters
+        u_scaled = u_raw * self.u_scale * self.global_scale
+        v_scaled = v_raw * self.v_scale * self.global_scale
+        p_scaled = p_raw * self.pressure_scale
+        
+        return torch.cat([u_scaled, v_scaled, p_scaled], dim=1)
+    
+    def get_velocity_scales(self):
+        """Get current velocity scaling parameters"""
+        return {
+            'u_scale': self.u_scale.item(),
+            'v_scale': self.v_scale.item(), 
+            'global_scale': self.global_scale.item(),
+            'effective_u_scale': (self.u_scale * self.global_scale).item(),
+            'effective_v_scale': (self.v_scale * self.global_scale).item()
+        }
+    
+    def set_velocity_scales(self, u_scale=None, v_scale=None, global_scale=None):
+        """Manually set velocity scaling parameters"""
+        with torch.no_grad():
+            if u_scale is not None:
+                self.u_scale.data = torch.tensor(float(u_scale))
+            if v_scale is not None:
+                self.v_scale.data = torch.tensor(float(v_scale))
+            if global_scale is not None:
+                self.global_scale.data = torch.tensor(float(global_scale))
+
 
 class ResidualBlock(nn.Module):
     """Residual block for better gradient flow."""
@@ -120,3 +190,7 @@ class ResidualBlock(nn.Module):
         
     def forward(self, x):
         return x  # Identity residual connection
+
+
+# Compatibility alias for backward compatibility
+DeepPINN = EnhancedDeepPINN
