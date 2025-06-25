@@ -159,7 +159,11 @@ class EnhancedDeepPINN(nn.Module):
         u_scaled = u_raw * self.u_scale * self.global_scale
         v_scaled = v_raw * self.v_scale * self.global_scale
         p_scaled = p_raw * self.pressure_scale
-        
+        # Clamp escalas para evitar inversión de signo
+        self.u_scale.data.clamp_(min=1e-5)
+        self.v_scale.data.clamp_(min=1e-5)
+        self.global_scale.data.clamp_(min=1e-5)
+
         return torch.cat([u_scaled, v_scaled, p_scaled], dim=1)
     
     def get_velocity_scales(self):

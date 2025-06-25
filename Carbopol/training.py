@@ -5,6 +5,26 @@ import matplotlib.pyplot as plt
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def compute_power_constraint(model, domain_points, device):
+    """Versión ultra-agresiva"""
+    domain_tensor = torch.tensor(domain_points, dtype=torch.float32, device=device, requires_grad=True)
+    
+    output = model(domain_tensor)
+    u, v = output[:, 0], output[:, 1]
+    
+    velocity_magnitude = torch.sqrt(u**2 + v**2)
+    
+    # Target aún más bajo basado en PIV
+    target_velocity = 0.001  # 1 mm/s
+    
+    # Penalizar CUALQUIER velocidad por encima del target
+    mean_velocity = torch.mean(velocity_magnitude)
+    max_velocity = torch.max(velocity_magnitude)
+    
+    # Pérdida cuadrática para el promedio y pérdida fuerte para máximos
+    power_loss = 10.0 * (mean_velocity - target_velocity)**2 + torch.mean(torch.relu(velocity_magnitude - 0.003)**2)
+    
+    return power_loss
 def train_enhanced_staged(model, optimizer, domain_points, inlet_points, outlet_points, wall_points, wall_normals, piv_reference_data=None):
     """
     Enhanced 4-stage training with magnitude calibration and mass conservation
@@ -32,6 +52,7 @@ def train_enhanced_staged(model, optimizer, domain_points, inlet_points, outlet_
     if piv_reference_data:
         piv_u_mean = piv_reference_data.get('u_mean', 0.0)
         piv_v_mean = piv_reference_data.get('v_mean', -0.005)
+        piv_v_mean = -abs(piv_v_mean)
         piv_mag_mean = piv_reference_data.get('mag_mean', 0.005)
         piv_mag_std = piv_reference_data.get('mag_std', 0.002)
         target_mass_flow = piv_reference_data.get('mass_flow_rate', 0.001)
@@ -41,36 +62,75 @@ def train_enhanced_staged(model, optimizer, domain_points, inlet_points, outlet_
         piv_mag_mean, piv_mag_std = 0.005, 0.002
         target_mass_flow = 0.001
         print("Using default reference values")
-    
+    print(f"\n🔍 DEBUG PIV Reference:")
+    print(f"  piv_v_mean = {piv_v_mean:.6f} (should be negative for downward flow)")
+    print(f"  piv_u_mean = {piv_u_mean:.6f}")    
     # Carbopol rheology
     tau_y, k, n = 30.0, 2.8, 0.65
     
     def compute_mass_conservation_loss():
-        """Mass conservation constraint - key for proper scaling"""
-        if len(inlet_points) == 0 or len(outlet_points) == 0:
-            return torch.tensor(0.0, device=device)
+        """Enhanced mass conservation with expected velocity scales"""
+        mass_loss = torch.tensor(0.0, device=device)
         
-        inlet_tensor = torch.tensor(inlet_points, dtype=torch.float32, device=device)
-        outlet_tensor = torch.tensor(outlet_points, dtype=torch.float32, device=device)
+        # Velocidades esperadas basadas en el rango PIV
+        expected_inlet_velocity = -0.002   # m/s (negativo = hacia abajo)
+        expected_outlet_velocity = 0.002   # m/s (positivo = hacia la derecha)
         
-        inlet_pred = model(inlet_tensor)
-        outlet_pred = model(outlet_tensor)
+        # 1. Conservación de masa en inlet/outlet
+        if len(inlet_points) > 0 and len(outlet_points) > 0:
+            inlet_tensor = torch.tensor(inlet_points, dtype=torch.float32, device=device)
+            outlet_tensor = torch.tensor(outlet_points, dtype=torch.float32, device=device)
+            
+            inlet_pred = model(inlet_tensor)
+            outlet_pred = model(outlet_tensor)
+            
+            v_inlet = inlet_pred[:, 1]  # componente vertical
+            u_outlet = outlet_pred[:, 0]  # componente horizontal
+            
+            # Calcular flujos promedio
+            avg_inlet_v = torch.mean(v_inlet)
+            avg_outlet_u = torch.mean(u_outlet)
+            
+            # a) Conservación de masa tradicional
+            inlet_flow = avg_inlet_v * L_up
+            outlet_flow = avg_outlet_u * H_left
+            mass_conservation_error = (inlet_flow + outlet_flow)**2
+            
+            # b) Penalizar desviaciones de velocidades esperadas
+            inlet_velocity_loss = (avg_inlet_v - expected_inlet_velocity)**2
+            outlet_velocity_loss = (avg_outlet_u - expected_outlet_velocity)**2
+            
+            # c) Penalizar variabilidad excesiva
+            inlet_std = torch.std(v_inlet)
+            outlet_std = torch.std(u_outlet)
+            uniformity_loss = inlet_std**2 + outlet_std**2
+            
+            # Combinar todas las pérdidas
+            mass_loss = (10.0 * mass_conservation_error + 
+                        5.0 * inlet_velocity_loss + 
+                        5.0 * outlet_velocity_loss + 
+                        0.1 * uniformity_loss)
         
-        avg_inlet_v = torch.mean(inlet_pred[:, 1])  # Should be negative (downward)
-        avg_outlet_u = torch.mean(outlet_pred[:, 0])  # Should be positive (rightward)
+        # 2. Continuidad en el dominio (opcional pero útil)
+        n_continuity_points = min(200, len(domain_points))
+        if n_continuity_points > 0:
+            indices = np.random.choice(len(domain_points), n_continuity_points, replace=False)
+            continuity_points = domain_points[indices]
+            
+            cont_tensor = torch.tensor(continuity_points, dtype=torch.float32, device=device, requires_grad=True)
+            cont_pred = model(cont_tensor)
+            u_cont, v_cont = cont_pred[:, 0], cont_pred[:, 1]
+            
+            # Calcular divergencia
+            u_x = torch.autograd.grad(u_cont.sum(), cont_tensor, create_graph=True)[0][:, 0]
+            v_y = torch.autograd.grad(v_cont.sum(), cont_tensor, create_graph=True)[0][:, 1]
+            
+            divergence = u_x + v_y
+            continuity_loss = torch.mean(divergence**2)
+            
+            mass_loss += 0.1 * continuity_loss
         
-        # Mass conservation: inflow + outflow = 0
-        inlet_flow = rho * avg_inlet_v * L_up
-        outlet_flow = rho * avg_outlet_u * H_right
-        mass_conservation_error = (inlet_flow + outlet_flow)**2
-        
-        # Target specific mass flow rate
-        target_flow_error = (abs(outlet_flow) - target_mass_flow)**2
-        
-        # Ensure correct flow directions
-        direction_penalty = torch.relu(avg_inlet_v)**2 + torch.relu(-avg_outlet_u)**2
-        
-        return mass_conservation_error + 0.5 * target_flow_error + direction_penalty
+        return mass_loss
     
     def compute_magnitude_matching_loss():
         """PIV magnitude matching - the key innovation for scaling"""
@@ -139,7 +199,37 @@ def train_enhanced_staged(model, optimizer, domain_points, inlet_points, outlet_
             bc_loss += 5.0 * torch.mean(u_wall**2 + v_wall**2)
         
         return bc_loss
-    
+    def compute_reynolds_constraint(model, domain_points, device):
+        """Asegurar Re << 1 en todo el dominio"""
+        n_points = min(500, len(domain_points))
+        indices = np.random.choice(len(domain_points), n_points, replace=False)
+        sample_points = domain_points[indices]
+        
+        sample_tensor = torch.tensor(sample_points, dtype=torch.float32, device=device, requires_grad=True)
+        output = model(sample_tensor)
+        u, v = output[:, 0], output[:, 1]
+        
+        # Calcular shear rate para viscosidad aparente
+        u_x = torch.autograd.grad(u.sum(), sample_tensor, create_graph=True)[0][:, 0]
+        u_y = torch.autograd.grad(u.sum(), sample_tensor, create_graph=True)[0][:, 1]
+        v_x = torch.autograd.grad(v.sum(), sample_tensor, create_graph=True)[0][:, 0]
+        v_y = torch.autograd.grad(v.sum(), sample_tensor, create_graph=True)[0][:, 1]
+        
+        shear_rate = torch.sqrt(2.0 * (u_x**2 + v_y**2 + 0.5*(u_y + v_x)**2))
+        
+        # Viscosidad aparente Herschel-Bulkley
+        eta_app = torch.where(shear_rate > 1e-6,
+                            tau_y / shear_rate + k * shear_rate**(n-1),
+                            1000.0)  # Alta viscosidad cuando shear_rate → 0
+        
+        # Reynolds local
+        velocity_mag = torch.sqrt(u**2 + v**2)
+        Re_local = rho * velocity_mag * 0.02 / eta_app  # 0.02m es escala característica
+        
+        # Para Carbopol, Re debe ser << 1
+        re_loss = torch.mean(torch.relu(Re_local - 0.01)**2)
+        
+        return re_loss   
     def compute_physics_loss_stable(domain_points):
         """Stable physics loss computation"""
         if len(domain_points) == 0:
@@ -164,8 +254,17 @@ def train_enhanced_staged(model, optimizer, domain_points, inlet_points, outlet_
         continuity = u_x + v_y
         f_x = p_x - eta_eff * (u_x + u_y) + rho * g_x
         f_y = p_y - eta_eff * (v_x + v_y) + rho * g_y
-
-        return torch.mean(continuity**2) + torch.mean(f_x**2 + f_y**2)
+        
+        # AGREGAR: Penalización por velocidades altas
+        velocity_magnitude = torch.sqrt(u**2 + v**2)
+        high_velocity_mask = velocity_magnitude > 0.002
+        velocity_penalty = torch.mean(torch.where(
+            high_velocity_mask,
+            1000.0 * (velocity_magnitude - 0.002)**2,
+            torch.zeros_like(velocity_magnitude)
+        ))
+        
+        return torch.mean(continuity**2) + torch.mean(f_x**2 + f_y**2) + velocity_penalty
     
     print(f"\nEnhanced 4-Stage Training with Magnitude Calibration")
     print(f"Target magnitude: {piv_mag_mean:.6f} ± {piv_mag_std:.6f} m/s")
@@ -200,98 +299,123 @@ def train_enhanced_staged(model, optimizer, domain_points, inlet_points, outlet_
                 print(f"  Velocity scales: u={scales['effective_u_scale']:.6f}, v={scales['effective_v_scale']:.6f}")
     
     # STAGE 2: Mass Conservation + Physics (1500 epochs)
-    print(f"\nStage 2: Mass Conservation + Physics (1500 epochs)...")
-    optimizer.param_groups[0]['lr'] = 4e-4
-    scheduler2 = CosineAnnealingWarmRestarts(optimizer, T_0=375, T_mult=1, eta_min=1e-6)
-    
-    physics_weights = np.linspace(0.01, 0.15, 1500)
-    
-    for epoch in range(1500):
-        model.train()
-        
+    print(f"\nStage 2: Mass conservation focus (500 epochs)...")
+    model.train()
+    optimizer.param_groups[0]['lr'] = 5e-4
+
+    for epoch in range(500):
         bc_loss = compute_boundary_loss_enhanced()
         mass_loss = compute_mass_conservation_loss()
         physics_loss = compute_physics_loss_stable(domain_points)
+        power_loss = compute_power_constraint(model, domain_points, device)
         
-        physics_weight = physics_weights[epoch]
-        total_loss = bc_loss + 5.0 * mass_loss + physics_weight * physics_loss
+        # AGREGAR: Calcular restricción de Reynolds
+        reynolds_loss = compute_reynolds_constraint(model, domain_points, device)
         
-        optimizer.zero_grad()
-        total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-        optimizer.step()
-        scheduler2.step()
+        physics_weight = min(0.01 * (epoch / 100), 0.05)
         
-        loss_history.append(total_loss.item())
-        physics_loss_history.append(physics_loss.item())
-        bc_loss_history.append(bc_loss.item())
-        magnitude_loss_history.append(0.0)
-        
-        if epoch % 375 == 0:
-            print(f"[Stage 2: {epoch:04d}] Total={total_loss.item():.6f}, Mass={mass_loss.item():.6f}, Physics={physics_loss.item():.6f}")
-        
-        # Safety check
-        if physics_loss.item() > 1000.0:
-            physics_weights[epoch:] *= 0.8
-    
-    # STAGE 3: Boundary Refinement (1000 epochs)
-    print(f"\nStage 3: Boundary Refinement (1000 epochs)...")
-    optimizer.param_groups[0]['lr'] = 2e-4
-    scheduler3 = CosineAnnealingWarmRestarts(optimizer, T_0=250, T_mult=1, eta_min=1e-7)
-    
-    for epoch in range(1000):
-        model.train()
-        
-        bc_loss = compute_boundary_loss_enhanced()
-        mass_loss = compute_mass_conservation_loss()
-        physics_loss = compute_physics_loss_stable(domain_points)
-        
-        total_loss = 2.0 * bc_loss + 10.0 * mass_loss + 0.05 * physics_loss
+        # MODIFICAR: Agregar reynolds_loss a la pérdida total
+        total_loss = bc_loss + 5.0 * mass_loss + physics_weight * physics_loss + 2.0 * power_loss + 2.0 * reynolds_loss
         
         optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.3)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        scheduler3.step()
         
-        loss_history.append(total_loss.item())
-        physics_loss_history.append(physics_loss.item())
-        bc_loss_history.append(bc_loss.item())
-        magnitude_loss_history.append(0.0)
-        
-        if epoch % 250 == 0:
-            print(f"[Stage 3: {epoch:04d}] Total={total_loss.item():.6f}, Mass={mass_loss.item():.6f}")
+        if epoch % 100 == 0:
+            # MODIFICAR: Incluir Reynolds en el print
+            print(f"[Stage 2: {epoch:03d}] BC={bc_loss.item():.6f}, Mass={mass_loss.item():.6f}, "
+                f"Physics={physics_loss.item():.6f}, Power={power_loss.item():.6f}, "
+                f"Reynolds={reynolds_loss.item():.6f}")
     
-    # STAGE 4: Magnitude Calibration (800 epochs) - THE KEY STAGE
-    print(f"\nStage 4: Magnitude Calibration (800 epochs)...")
+    print(f"\nStage 3: Full physics integration (500 epochs)...")
+    model.train()
     optimizer.param_groups[0]['lr'] = 1e-4
-    scheduler4 = CosineAnnealingWarmRestarts(optimizer, T_0=200, T_mult=1, eta_min=1e-8)
-    
-    for epoch in range(800):
-        model.train()
-        
+
+    for epoch in range(500):
         bc_loss = compute_boundary_loss_enhanced()
         mass_loss = compute_mass_conservation_loss()
-        magnitude_loss = compute_magnitude_matching_loss()
         physics_loss = compute_physics_loss_stable(domain_points)
+        power_loss = compute_power_constraint(model, domain_points, device)
         
-        # Focus on magnitude matching
-        total_loss = 0.5 * bc_loss + 3.0 * mass_loss + 10.0 * magnitude_loss + 0.01 * physics_loss
+        # AGREGAR: Calcular restricción de Reynolds
+        reynolds_loss = compute_reynolds_constraint(model, domain_points, device)
+        
+        # MODIFICAR: Aumentar peso de reynolds_loss
+        total_loss = 2.0 * bc_loss + 10.0 * mass_loss + 0.05 * physics_loss + 10.0 * power_loss + 5.0 * reynolds_loss
         
         optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        scheduler4.step()
         
-        loss_history.append(total_loss.item())
-        physics_loss_history.append(physics_loss.item())
-        bc_loss_history.append(bc_loss.item())
-        magnitude_loss_history.append(magnitude_loss.item())
+        if epoch % 100 == 0:
+            print(f"[Stage 3: {epoch:03d}] BC={bc_loss.item():.6f}, Mass={mass_loss.item():.6f}, "
+                f"Physics={physics_loss.item():.6f}, Power={power_loss.item():.6f}, "
+                f"Reynolds={reynolds_loss.item():.6f}")
+    
+    # ===== Stage 4: Magnitude matching (300 epochs) =====
+    # ===== Stage 4: Final refinement (300 epochs) =====
+    print(f"\nStage 4: Final refinement (300 epochs)...")
+    model.train()
+    optimizer.param_groups[0]['lr'] = 5e-5
+
+    for epoch in range(300):
+        bc_loss = compute_boundary_loss_enhanced()
+        mass_loss = compute_mass_conservation_loss()
+        physics_loss = compute_physics_loss_stable(domain_points)
+        power_loss = compute_power_constraint(model, domain_points, device)
         
-        if epoch % 200 == 0:
-            print(f"[Stage 4: {epoch:04d}] Total={total_loss.item():.6f}, Magnitude={magnitude_loss.item():.6f}")
-            
+        # AGREGAR: Calcular restricción de Reynolds
+        reynolds_loss = compute_reynolds_constraint(model, domain_points, device)
+        
+        # MODIFICAR: Peso muy alto para Reynolds en etapa final
+        total_loss = bc_loss + mass_loss + 20.0 * power_loss + 10.0 * reynolds_loss + 0.001 * physics_loss
+        
+        optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        
+        if epoch % 100 == 0:
+            print(f"[Stage 4: {epoch:03d}] BC={bc_loss.item():.6f}, Mass={mass_loss.item():.6f}, "
+                f"Physics={physics_loss.item():.6f}, Power={power_loss.item():.6f}, "
+                f"Reynolds={reynolds_loss.item():.6f}")
+    # ===== Stage 5: Magnitude reduction focus (300 epochs) =====
+    print(f"\nStage 5: Magnitude reduction (300 epochs)...")
+    model.train()
+    optimizer.param_groups[0]['lr'] = 1e-5
+
+    for epoch in range(300):
+        # Solo restricciones de magnitud
+        bc_loss = compute_boundary_loss_enhanced()
+        power_loss = compute_power_constraint(model, domain_points, device)
+        reynolds_loss = compute_reynolds_constraint(model, domain_points, device)
+        
+        # Regularización L2 directa
+        n_reg = min(1000, len(domain_points))
+        reg_indices = np.random.choice(len(domain_points), n_reg, replace=False)
+        reg_tensor = torch.tensor(domain_points[reg_indices], dtype=torch.float32, device=device)
+        reg_output = model(reg_tensor)
+        u_reg, v_reg = reg_output[:, 0], reg_output[:, 1]
+        
+        # Penalizar velocidades > 0.002 m/s
+        velocity_mag = torch.sqrt(u_reg**2 + v_reg**2)
+        mag_penalty = torch.mean(torch.relu(velocity_mag - 0.002)**2)
+        
+        # Solo pérdidas de magnitud
+        total_loss = 0.1 * bc_loss + 50.0 * power_loss + 20.0 * reynolds_loss + 100.0 * mag_penalty
+        
+        optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)  # Clip más agresivo
+        optimizer.step()
+        
+        if epoch % 100 == 0:
+            avg_vel = torch.mean(velocity_mag).item()
+            max_vel = torch.max(velocity_mag).item()
+            print(f"[Stage 5: {epoch:03d}] Avg_vel={avg_vel:.6f}, Max_vel={max_vel:.6f}, "
+                f"Power={power_loss.item():.6f}, Re={reynolds_loss.item():.6f}")
             # Monitor magnitude progress
             with torch.no_grad():
                 if len(domain_points) > 0:

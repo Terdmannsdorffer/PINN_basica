@@ -181,8 +181,24 @@ Flow rate: {piv_reference_data['mass_flow_rate']:.6f} kg/s"""
     print("\n📊 STEP 7: Generating Enhanced Visualizations...")
     visualize_results(trained_model, domain_points, inside_L, wall_segments, 
                      inlet_points, outlet_points, device)
-
+    # En main.py, después del entrenamiento:
+    model.eval()
+    with torch.no_grad():
+        # Verificar velocidades en la entrada
+        if len(inlet_points) > 0:
+            inlet_tensor = torch.tensor(inlet_points[:5], dtype=torch.float32, device=device)
+            inlet_pred = model(inlet_tensor)
+            print("\nVelocidades en la ENTRADA:")
+            for i in range(min(5, len(inlet_points))):
+                print(f"  Punto {i}: u={inlet_pred[i,0]:.6f}, v={inlet_pred[i,1]:.6f}")
+        
+        # Verificar velocidades en el centro
+        center_point = torch.tensor([[0.05, 0.06]], dtype=torch.float32, device=device)
+        center_pred = model(center_point)
+        print(f"\nVelocidad en el CENTRO: u={center_pred[0,0]:.6f}, v={center_pred[0,1]:.6f}")
     print("\n📈 STEP 8: Creating PINN Data for PIV Comparison...")
+
+    
     create_pinn_data_for_comparison(trained_model, device)
 
     print("\n" + "="*80)

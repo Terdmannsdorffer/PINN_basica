@@ -74,7 +74,8 @@ def generate_domain_points(n_total=3000, adaptive_sampling=True):
         wall_added = 0
         for segment in wall_segments_internal:
             (x1, y1), (x2, y2) = segment
-            points_per_segment = n_walls // len(wall_segments_internal)
+            points_per_segment = 2 * (n_walls // len(wall_segments_internal))  # doble de resolución
+            decay_scale = wall_buffer / 5  # más fino cerca de la pared
             
             for _ in range(points_per_segment):
                 if wall_added >= n_walls:
@@ -94,8 +95,8 @@ def generate_domain_points(n_total=3000, adaptive_sampling=True):
                     nx, ny = 0, 0
                 
                 # Exponential distance from wall (more points closer to wall)
-                r = np.random.exponential(scale=wall_buffer/3)
-                r = min(r, wall_buffer)  # Cap the distance
+                r = np.random.exponential(scale=decay_scale)
+                r = min(r, wall_buffer)
                 
                 x = x_wall + nx * r
                 y = y_wall + ny * r
@@ -128,6 +129,18 @@ def generate_domain_points(n_total=3000, adaptive_sampling=True):
             if inside_L(x, y):
                 domain_points.append([x, y])
                 inlet_outlet_added += 1
+    # 5. Alta resolución justo en la salida (OUTLET)
+    outlet_dense_x = np.linspace(L_down - 0.004, L_down - 0.0005, 12)
+    outlet_dense_y = np.linspace(0.0005, H_right - 0.0005, 10)
+    outlet_enhanced = []
+
+    for x in outlet_dense_x:
+        for y in outlet_dense_y:
+            if inside_L(x, y):
+                domain_points.append([x, y])
+                outlet_enhanced.append([x, y])
+
+    print(f"  Puntos añadidos con alta resolución en salida: {len(outlet_enhanced)}")
 
     domain_points = np.array(domain_points)
     
